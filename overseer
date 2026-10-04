@@ -1,0 +1,369 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""overseer -- one program that owns /help and every other command, so
+there's exactly one place slash commands are ever supposed to work
+from the bare Termux prompt: launch `overseer`, then type them there.
+
+Requested directly, right after "/help still says no command detected"
+turned out to mean it had been typed at a bare Termux prompt -- which
+never runs any slash command, ever, no matter what's installed. This
+is the fix: a single, clearly-named program to launch first.
+
+    overseer
+
+Then, inside it:
+
+    /help                        this same list -- numbered, so /open
+                                  takes a number too (a bare number
+                                  typed alone works the same way)
+    /list                        every tagged command (same list as `programs`)
+    /open <name-or-number>       start one, right here in this session
+    /newsession <command...>     start one in a brand new, independent
+                                  Termux session (needs the one-time
+                                  RUN_COMMAND setup -- see opensession)
+    /quit
+
+Any other word that's a real command on PATH just runs directly too --
+`spark` launches Spark, no /open needed, whether or not it's tagged
+for /list. Deliberately more permissive than /open (which only knows
+about tagged commands, via resolve()).
+
+Or talk to it from a pinned notification instead of opening Termux at
+all -- requested directly, right after building the REPL above:
+
+    overseer notify             # posts a pinned (--ongoing, can't be
+                                 # swiped away), Reply-button notification
+    overseer notify --stop      # takes it back down
+
+Same shape as ~/bin/ti.sh's own notification-reply trick (a Termux:API
+"Reply" button whose action embeds a literal, unescaped $REPLY --
+Termux:API itself substitutes the typed text in before running the
+action, when that specific button is tapped): tapping Reply, typing a
+command, and sending it runs `overseer notify --reply "<text>"`, which
+feeds the text straight through the SAME run_command() the REPL above
+uses, and re-posts the notification with whatever it printed as the
+new content -- one persistent little console living in the
+notification shade, no Termux window ever needs to be open for it.
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import babymenu  # noqa: E402 -- shared numbered-menu pattern, see its own docstring
+from catalog_lib import format_list, resolve, discover  # noqa: E402 -- shared with `programs`
+
+HELP = [
+    "/help                        this list -- /list is numbered, and",
+    "                             /open takes a number too (or type",
+    "                             the number alone, no /open needed)",
+    "/list                        every tagged command and its start command",
+    "/open <name-or-number>       start one, right here in this session",
+    "/newsession <command...>     start one in a brand new, independent Termux session",
+    "/sessions                    list running claude sessions -- more than",
+    "                             one at once is what caused the last freeze",
+    "/sessions kill <pid>         close one",
+    "/quit",
+    "",
+    "(also: any real command's own name works directly too, e.g. just",
+    " typing `spark` -- doesn't need /open, and works even if it's not",
+    " in /list)",
+    "",
+    "(from a fresh shell, not in here: `overseer notify` posts a pinned",
+    " reply notification -- `overseer notify --stop` takes it down)",
+]
+
+
+def cmd_open(rest):
+    token = rest.strip()
+    if not token:
+        return ["try: /open <name-or-number> -- /list to see what's available"]
+    name = resolve(token)
+    if name is None:
+        return ["no command called '%s' -- /list to see what's available" % token]
+    subprocess.run([name])
+    return []
+
+
+def cmd_newsession(rest):
+    """Same RUN_COMMAND call opensession makes from plain shell, and
+    open_session.py makes from termux-link -- three doors onto the same
+    one mechanism, on purpose, rather than picking just one place it's
+    allowed to live."""
+    command_line = rest.strip()
+    if not command_line:
+        return ["try: /newsession <command...> -- e.g. /newsession spark"]
+    cmd = [
+        "am", "startservice", "--user", "0",
+        "-n", "com.termux/com.termux.app.RunCommandService",
+        "-a", "com.termux.RUN_COMMAND",
+        "--es", "com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash",
+        "--esa", "com.termux.RUN_COMMAND_ARGUMENTS", "-c," + command_line,
+        "--ez", "com.termux.RUN_COMMAND_BACKGROUND", "false",
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        return ["'am' not found -- this only works inside real Termux"]
+    except subprocess.CalledProcessError as e:
+        return ["couldn't open a new session: " + (e.stderr or str(e)).strip()]
+    return ["opened a new session running: " + command_line]
+
+
+def _proc_mem_mb(pid):
+    try:
+        with open("/proc/%s/status" % pid) as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _live_claude_pids():
+    try:
+        out = subprocess.run(["pgrep", "-x", "claude"], capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    return [p for p in out.stdout.split() if p]
+
+
+def cmd_sessions(rest):
+    """Lists running `claude` processes -- however they were started,
+    the interactive alias in ~/.bashrc or the one Termux:Boot starts
+    automatically every reboot -- and lets you close one, by its raw
+    pid OR by its position in the list this itself just printed (e.g.
+    "2") -- an exact pid match always wins first, so a real pid that
+    happens to look small never gets misread as a position. Built after
+    three concurrent sessions forced this phone into heavy swap and
+    froze Termux (root-caused 2026-09-18); ~/.bashrc's own claude()
+    function now warns before starting a new one, this is the other
+    half -- closing an EXISTING extra you've already found."""
+    rest = rest.strip()
+    pids = _live_claude_pids()
+    if pids is None:
+        return ["pgrep not found"]
+    if rest.startswith("kill "):
+        token = rest[5:].strip()
+        pid = token
+        if token not in pids and token.isdigit():
+            idx = int(token) - 1
+            if 0 <= idx < len(pids):
+                pid = pids[idx]
+        if not pid.isdigit():
+            return ["try: /sessions kill <pid-or-position>"]
+        try:
+            os.kill(int(pid), 9)
+        except ProcessLookupError:
+            return ["no such process: %s -- already gone?" % pid]
+        except PermissionError:
+            return ["no permission to close %s" % pid]
+        return ["closed %s -- not lost, `claude --continue` picks it back up" % pid]
+    if not pids:
+        return ["no claude sessions found running"]
+    lines = ["%d claude session%s running:" % (len(pids), "" if len(pids) == 1 else "s")]
+    for i, pid in enumerate(pids, 1):
+        mb = _proc_mem_mb(pid)
+        lines.append("  %d. pid %s%s" % (i, pid, "  (%dMB)" % mb if mb else ""))
+    if len(pids) > 1:
+        lines.append("more than one at once is what caused the last freeze --")
+        lines.append("close extras with: /sessions kill <pid-or-position>")
+    return lines
+
+
+def run_command(said):
+    said = said.strip()
+    if not said or said == "/":
+        said = "/help"
+    elif said.lstrip("/").isdigit():
+        said = "/open " + said.lstrip("/")
+    word, _, rest = said.lstrip("/").partition(" ")
+    if word == "help":
+        return HELP
+    if word == "list":
+        return format_list()
+    if word == "open":
+        return cmd_open(rest)
+    if word == "newsession":
+        return cmd_newsession(rest)
+    if word == "sessions":
+        return cmd_sessions(rest)
+    # Anything else: if it's a real command on PATH, just run it --
+    # "spark" launches spark the same way typing it at an ordinary
+    # shell prompt would, whether or not it's # CATALOG:-tagged (that
+    # tag only controls whether /list shows it, not whether this can
+    # run it -- deliberately more permissive than resolve()/cmd_open).
+    if shutil.which(word):
+        subprocess.run([word] + rest.split())
+        return []
+    return ["no such command: /%s -- /help to see what's available" % word]
+
+
+NOTIFY_ID = "overseer"
+
+
+SELF = os.path.abspath(__file__)
+
+
+def notify_post(content=None):
+    try:
+        subprocess.run([
+            "termux-notification", "--id", NOTIFY_ID,
+            "--title", "overseer",
+            "--content", (content or "type a command below")[:2000],
+            "--button1", "Reply",
+            # This $REPLY is deliberately NOT expanded here -- Termux:API's
+            # own notification system substitutes the typed reply text
+            # into it before running the action, same trick ~/bin/ti.sh
+            # already uses for its own Reply button. Matched against
+            # ti.sh's own working shape as closely as possible: the full
+            # absolute path (not the bare `overseer` command, which needs
+            # PATH set up -- ti.sh's $SELF is absolute for the same
+            # reason) and no quotes around $REPLY (ti.sh has none either).
+            "--button1-action", "%s notify --reply $REPLY" % SELF,
+            "--ongoing",
+        ], check=True)
+    except FileNotFoundError:
+        print("termux-notification not found -- needs Termux:API "
+              "(pkg install termux-api, plus the Termux:API app)")
+    except subprocess.CalledProcessError as e:
+        print("couldn't post the notification: " + str(e))
+
+
+def notify_reply(text):
+    lines = run_command(text)
+    notify_post("\n".join(lines) if lines else "(no output)")
+
+
+def notify_stop():
+    try:
+        subprocess.run(["termux-notification-remove", "--id", NOTIFY_ID], check=True)
+    except FileNotFoundError:
+        print("termux-notification-remove not found -- needs Termux:API")
+    except subprocess.CalledProcessError as e:
+        print("couldn't remove it: " + str(e))
+
+
+def _menu_screen(title, options, has_parent, page=0):
+    """Prints one babymenu screen and reads one line. Returns (action,
+    raw_text) -- action is a value from `options`, or babymenu's own
+    BACK/EXIT/MORE, or None if what was typed wasn't a valid digit (in
+    which case raw_text is handed back so the caller can still try it
+    as an ordinary /slash command -- typing /help or /quit still works
+    everywhere, this menu is the new default view, not a replacement
+    that breaks muscle memory).
+
+    "a" (babymenu.ALL_KEY) is handled right here, generically, so every
+    screen that goes through this function gets "show all" for free --
+    prints the full un-paginated list and redraws the very same screen
+    rather than treating "a" as a command or a wrong digit."""
+    while True:
+        lines, keymap = babymenu.render(title, options, page=page, has_parent=has_parent)
+        print("\n".join(lines))
+        try:
+            said = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return (babymenu.EXIT if not has_parent else babymenu.BACK), said
+        if said.lower() == babymenu.ALL_KEY:
+            print("\n".join(babymenu.format_all(options)))
+            continue
+        return keymap.get(said), said
+
+
+def _menu_open_command():
+    page = 0
+    while True:
+        options = [(desc, name) for name, desc in discover()]
+        action, raw = _menu_screen("Open which command?", options, has_parent=True, page=page)
+        if action == babymenu.BACK:
+            return
+        if action == babymenu.MORE:
+            page += 1
+            continue
+        if action is not None:
+            subprocess.run([action])
+            return
+        if raw.strip():
+            for line in run_command(raw):
+                print(line)
+
+
+def _menu_sessions():
+    page = 0
+    while True:
+        out = subprocess.run(["pgrep", "-x", "claude"], capture_output=True, text=True)
+        pids = [p for p in out.stdout.split() if p]
+        options = []
+        for pid in pids:
+            mb = _proc_mem_mb(pid)
+            options.append(("close pid %s%s" % (pid, "  (%dMB)" % mb if mb else ""), pid))
+        action, raw = _menu_screen("Claude sessions", options, has_parent=True, page=page)
+        if action == babymenu.BACK:
+            return
+        if action == babymenu.MORE:
+            page += 1
+            continue
+        if action is not None:
+            try:
+                os.kill(int(action), 9)
+                print("closed %s -- claude --continue picks it back up later" % action)
+            except ProcessLookupError:
+                print("already gone")
+            return
+        if raw.strip():
+            for line in run_command(raw):
+                print(line)
+
+
+def _menu_top():
+    options = [
+        ("List every command", "list"),
+        ("Open a command", "open"),
+        ("Open one in a new session", "newsession"),
+        ("Claude sessions (close extras)", "sessions"),
+        ("Post the pinned notification", "notify"),
+    ]
+    while True:
+        action, raw = _menu_screen("overseer", options, has_parent=False)
+        if action == babymenu.EXIT:
+            return
+        elif action == "list":
+            print("\n".join(format_list()))
+        elif action == "open":
+            _menu_open_command()
+        elif action == "newsession":
+            cmdline = input("command to run in a new session: ").strip()
+            if cmdline:
+                for line in cmd_newsession(cmdline):
+                    print(line)
+        elif action == "sessions":
+            _menu_sessions()
+        elif action == "notify":
+            notify_post()
+            print("posted")
+        elif raw.strip():
+            word = raw.strip().lstrip("/").split(None, 1)[0].lower()
+            if word in ("quit", "q"):
+                return
+            for line in run_command(raw):
+                print(line)
+
+
+def run():
+    _menu_top()
+    print("bye")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "notify":
+        if len(sys.argv) >= 3 and sys.argv[2] == "--reply":
+            notify_reply(" ".join(sys.argv[3:]))
+        elif len(sys.argv) >= 3 and sys.argv[2] == "--stop":
+            notify_stop()
+        else:
+            notify_post()
+    else:
+        run()

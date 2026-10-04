@@ -1,0 +1,37 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# CATALOG: opensession -- opens a brand-new, independent Termux session running any command
+#
+# Plain shell, nothing Python, no link.py, no termux-link at all -- for
+# testing (or just using) Termux's own RUN_COMMAND session-opening on
+# its own, decoupled from every other program built this session.
+#
+# One-time setup, on the device itself, before this can work at all:
+#
+#     echo "allow-external-apps = true" >> ~/.termux/termux.properties
+#     termux-reload-settings
+#
+# Termux refuses RUN_COMMAND -- from anywhere, including from itself --
+# until that line is there. It's a deliberate safety switch: RUN_COMMAND
+# can start arbitrary commands in a new session, so it's off by default.
+#
+#     opensession echo hello from a new session
+#     opensession spark
+#     opensession python3 /data/data/com.termux/files/home/termux-link/worker.py demo
+#
+# Not verified from the sandbox this was written in -- there's no real
+# Android activity manager there to fire the intent against. This is
+# the isolated way to find out, on the device itself, whether it works
+# at all, before trusting anything built on top of it (termux-link's
+# own open_session.py does the same thing, just from Python).
+
+if [ $# -eq 0 ]; then
+    echo "usage: opensession <command> [args...]" >&2
+    exit 1
+fi
+
+am startservice --user 0 \
+    -n com.termux/com.termux.app.RunCommandService \
+    -a com.termux.RUN_COMMAND \
+    --es com.termux.RUN_COMMAND_PATH /data/data/com.termux/files/usr/bin/bash \
+    --esa com.termux.RUN_COMMAND_ARGUMENTS "-c,$*" \
+    --ez com.termux.RUN_COMMAND_BACKGROUND false

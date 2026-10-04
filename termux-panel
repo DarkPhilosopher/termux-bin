@@ -1,0 +1,278 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""termux-panel -- add or remove a swipeable panel of extra keys from
+Termux's own soft-keyboard key row, by editing ~/.termux/termux.properties'
+`extra-keys` setting.
+
+Termux's `extra-keys` is a list of PANELS, each panel a list of ROWS,
+each row a list of keys -- more than one panel means you can swipe the
+row sideways to switch between them. Most termux.properties files on
+the wild only ever define one panel (or none, meaning Termux's own
+built-in default: ESC/CTRL/ALT/TAB/arrows over two rows). This tool
+only ever adds or removes a WHOLE PANEL at a time; it never edits
+existing panels' own keys.
+
+    termux-panel list
+    termux-panel add "ESC,TAB,CTRL,ALT;HOME,UP,END,PGUP,PGDN"
+    termux-panel add "F1,F2,F3,F4,F5,F6" --at 0
+    termux-panel remove
+    termux-panel remove 0
+
+`add`'s argument is one string: rows separated by `;`, keys within a
+row separated by `,`. `remove` with no index removes the LAST panel;
+it refuses to remove the only panel left (there's no toggling it off
+to nothing -- the app itself always shows at least the row).
+
+Scope, on purpose: this only understands plain string keys ('ESC',
+'-', etc.), not Termux's fancier {key: '...', popup: '...'} objects --
+if your file already uses those, this refuses to touch it rather than
+risk mangling something it can't fully parse back out again. Edit that
+file by hand in that case.
+
+Reloads Termux's settings itself (`termux-reload-settings`) once it's
+done, so the change shows up immediately -- no need to restart the app.
+"""
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+PROPERTIES_PATH = Path.home() / ".termux" / "termux.properties"
+
+# Termux's own built-in default (undocumented anywhere but the app's
+# source, but stable across versions) -- used as the seed panel 1 when
+# there's no `extra-keys` line at all yet, so turning this on for the
+# first time doesn't silently replace the two-row layout everyone
+# already expects with just whatever panel you're adding.
+BUILTIN_DEFAULT_PANEL = [
+    ["ESC", "/", "-", "HOME", "UP", "END", "PGUP"],
+    ["TAB", "CTRL", "ALT", "LEFT", "DOWN", "RIGHT", "PGDN"],
+]
+
+
+class PanelError(Exception):
+    pass
+
+
+def _find_extra_keys_span(text):
+    """(start, end) character offsets of the *value* of an `extra-keys =
+    ...` assignment (commented out or not), matching brackets so a
+    value that wraps across several lines is still found whole. None if
+    there isn't one at all. Stock termux.properties files sometimes ship
+    a few different commented-out extra-keys EXAMPLES as documentation
+    -- if there's more than one match, an active (uncommented) one wins
+    over any commented ones; among several of the same kind, the LAST
+    one in the file wins, on the assumption that whatever a person
+    appended themselves comes after the stock examples above it."""
+    matches = list(re.finditer(r"^\s*(#?)\s*extra-keys\s*=\s*", text, re.MULTILINE))
+    if not matches:
+        return None
+    active = [m for m in matches if not m.group(1)]
+    m = active[-1] if active else matches[-1]
+    start = m.end()
+    if start >= len(text) or text[start] != "[":
+        raise PanelError("found an extra-keys line that doesn't start with '[' -- "
+                          "not touching it")
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "[":
+            depth += 1
+        elif text[i] == "]":
+            depth -= 1
+            if depth == 0:
+                return start, i + 1
+    raise PanelError("extra-keys value never closes its brackets -- not touching it")
+
+
+def load_panels(text):
+    """The current list of panels, or the built-in default (as a single
+    panel) if there's no extra-keys line yet at all."""
+    span = _find_extra_keys_span(text)
+    if span is None:
+        return [BUILTIN_DEFAULT_PANEL]
+    start, end = span
+    raw = text[start:end]
+    try:
+        value = json.loads(raw.replace("'", '"'))
+    except json.JSONDecodeError as err:
+        raise PanelError(
+            "couldn't parse the existing extra-keys value (%s) -- probably uses "
+            "Termux's {key: ..., popup: ...} object keys with BARE (unquoted) "
+            "field names, which this tool deliberately doesn't touch; edit "
+            "termux.properties by hand instead" % err)
+    if not isinstance(value, list):
+        raise PanelError("extra-keys isn't a list at all -- not touching it")
+    if not value:
+        return [BUILTIN_DEFAULT_PANEL]
+    # Termux accepts extra-keys at three different nesting depths: a
+    # bare single row (a flat list of keys), a single panel (a list of
+    # rows), or a proper list of panels. Normalize whichever it is to
+    # "a list of panels" so add/remove always deal in whole panels
+    # either way. Depth is "how many times you can descend via [0]
+    # before hitting a leaf key" -- a plain string, or a {key:...}
+    # object; either counts as one key, not a further list to descend
+    # into.
+    depth, probe = 0, value
+    while isinstance(probe, list) and probe:
+        probe = probe[0]
+        depth += 1
+    if depth >= 3:
+        return value
+    if depth == 2:
+        return [value]
+    if depth == 1:
+        return [[value]]
+    raise PanelError("couldn't figure out extra-keys' own shape -- not touching it")
+
+
+def render_panels(panels):
+    """Back to Termux's own single-quoted textual style, one line."""
+    def render(value):
+        if isinstance(value, str):
+            return "'" + value.replace("'", "\\'") + "'"
+        if isinstance(value, list):
+            return "[" + ",".join(render(v) for v in value) + "]"
+        if isinstance(value, dict):
+            return "{" + ",".join("%s:%s" % (k, render(v)) for k, v in value.items()) + "}"
+        return json.dumps(value)
+    return "extra-keys = " + render(panels)
+
+
+def save_panels(path, panels):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text() if path.exists() else ""
+    # A one-time safety net, the first time this tool ever touches the
+    # file -- never overwritten again after that, so it always holds
+    # whatever the file looked like before this tool's very first edit.
+    backup = path.parent / (path.name + ".bak")
+    if text and not backup.exists():
+        backup.write_text(text)
+    line = render_panels(panels)
+    span = _find_extra_keys_span(text) if text else None
+    if span is None:
+        sep = "\n" if text and not text.endswith("\n") else ""
+        text = text + sep + line + "\n"
+    else:
+        # Replace from the start of the whole line (back up to the last
+        # newline) through the value's own end, so a leading "# " that
+        # commented it out gets dropped along with it -- the result is
+        # always a live, active setting.
+        line_start = text.rfind("\n", 0, span[0]) + 1
+        text = text[:line_start] + line + text[span[1]:]
+    path.write_text(text)
+
+
+def parse_rows_arg(rows_arg):
+    rows = [[key.strip() for key in row.split(",") if key.strip()]
+            for row in rows_arg.split(";")]
+    rows = [row for row in rows if row]
+    if not rows:
+        raise PanelError("no keys given -- try: \"ESC,TAB;HOME,END\"")
+    return rows
+
+
+def reload_settings():
+    import subprocess
+    try:
+        subprocess.run(["termux-reload-settings"], check=False,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
+
+
+def cmd_list(args):
+    panels = load_panels(_read())
+    if len(panels) == 1:
+        print("1 panel (nothing to swipe between):")
+    else:
+        print("%d panels (swipe the key row sideways to switch):" % len(panels))
+    for i, panel in enumerate(panels):
+        print("  [%d]" % i)
+        for row in panel:
+            print("      " + "  ".join(row))
+
+
+def cmd_add(args):
+    rows = parse_rows_arg(args.rows)
+    panels = load_panels(_read())
+    at = len(panels) if args.at is None else args.at
+    if at < 0 or at > len(panels):
+        raise PanelError("--at %d is out of range (0..%d)" % (args.at, len(panels)))
+    panels.insert(at, rows)
+    _apply(panels, args.dry_run, "added panel %d" % at)
+
+
+def cmd_remove(args):
+    panels = load_panels(_read())
+    if len(panels) <= 1:
+        raise PanelError("that's the only panel left -- refusing to remove it "
+                          "(the key row always shows at least one)")
+    index = len(panels) - 1 if args.index is None else args.index
+    if index < 0 or index >= len(panels):
+        raise PanelError("no panel %d -- there are %d (0..%d)"
+                          % (index, len(panels), len(panels) - 1))
+    panels.pop(index)
+    _apply(panels, args.dry_run, "removed panel %d" % index)
+
+
+def _read():
+    return PROPERTIES_PATH.read_text() if PROPERTIES_PATH.exists() else ""
+
+
+def _apply(panels, dry_run, message):
+    if dry_run:
+        print("(dry run, not written)")
+        print(render_panels(panels))
+        return
+    backup = PROPERTIES_PATH.parent / (PROPERTIES_PATH.name + ".bak")
+    had_backup_already = backup.exists()
+    save_panels(PROPERTIES_PATH, panels)
+    print(message + " -- " + str(len(panels)) + " total")
+    print(render_panels(panels))
+    if not had_backup_already and backup.exists():
+        print("(first edit -- the file as it was before is saved at %s)" % backup)
+    if reload_settings():
+        print("reloaded -- should show up right away")
+    else:
+        print("couldn't run termux-reload-settings itself; "
+              "run it yourself, or just restart the app")
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="termux-panel",
+        description="Add or remove a swipeable panel of Termux's own extra keys.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list", help="show the panels currently configured")
+
+    p_add = sub.add_parser("add", help="add a new panel")
+    p_add.add_argument("rows", help="rows separated by ';', keys within a row by ','")
+    p_add.add_argument("--at", type=int, default=None,
+                        help="insert position (default: append at the end)")
+    p_add.add_argument("--dry-run", action="store_true",
+                        help="show what would change, don't write anything")
+
+    p_rm = sub.add_parser("remove", help="remove a panel")
+    p_rm.add_argument("index", type=int, nargs="?", default=None,
+                       help="which panel (default: the last one)")
+    p_rm.add_argument("--dry-run", action="store_true",
+                       help="show what would change, don't write anything")
+
+    args = p.parse_args()
+    try:
+        if args.cmd == "list":
+            cmd_list(args)
+        elif args.cmd == "add":
+            cmd_add(args)
+        elif args.cmd == "remove":
+            cmd_remove(args)
+    except PanelError as err:
+        print("termux-panel: " + str(err), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

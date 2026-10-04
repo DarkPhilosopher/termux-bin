@@ -1,0 +1,94 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""programs -- lists every one of your own commands, live, plus the
+exact command that starts each one. Never a hand-kept list that goes
+stale: it scans $PREFIX/bin itself every time it's asked, so a brand
+new program you add later shows up the very next time you run this,
+with nothing here needing to be told about it by hand.
+
+Requested directly (paraphrased): "a list that will detect updates and
+list all commands and start commands to open programs" -- "the list
+shall show in /help."
+
+How it tells "one of yours" apart from Termux's few hundred stock
+binaries: any $PREFIX/bin script carrying a line starting with
+"# CATALOG: <description>" near its top. Every shim this session has
+written already has one (added retroactively to the ones that
+predate this); ANY future one just needs the same one-line tag to be
+found automatically -- see the bottom of this file for the exact
+line to copy.
+
+    programs             # the interactive form -- /help shows the list
+    programs open spark  # starts 'spark' directly, no REPL, for scripts
+
+Inside the interactive form:
+
+    /help          list every command found, and how to start it --
+                   numbered, so /open takes a number too
+    /open <name-or-number>   start one
+    /quit
+
+A bare number typed alone (no /open, no word) is shorthand for the
+same thing -- so once /help has shown "3. gridplace  ...", typing just
+"3" starts it.
+"""
+
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from catalog_lib import format_list, resolve  # noqa: E402 -- shared with overseer
+
+
+def cmd_help(rest):
+    return format_list()
+
+
+def cmd_open(rest):
+    token = rest.strip()
+    if not token:
+        return ["try: /open <name-or-number> -- /help to see what's available"]
+    name = resolve(token)
+    if name is None:
+        return ["no command called '%s' -- /help to see what's available" % token]
+    subprocess.run([name])
+    return []
+
+
+def run_repl():
+    print("\n".join(format_list()))
+    print("\n/help to see this again, /open <name-or-number> to start one, /quit to leave")
+    while True:
+        try:
+            said = input("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not said or said in ("/quit", "/q", "quit"):
+            break
+        if said.lstrip("/").isdigit():
+            said = "/open " + said.lstrip("/")
+        said = said.lstrip("/")
+        word, _, rest = said.partition(" ")
+        if word in ("help", ""):
+            print("\n".join(cmd_help(rest)))
+        elif word == "open":
+            for line in cmd_open(rest):
+                print(line)
+        else:
+            print("no such command: /%s -- /help to see what's available" % word)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "open":
+        for line in cmd_open(sys.argv[2]):
+            print(line)
+    elif len(sys.argv) == 1:
+        run_repl()
+    else:
+        print("\n".join(format_list()))
+
+# To add a NEW program to this list later, put one line near the top
+# of its $PREFIX/bin shim (copy this, change the description):
+#
+#     # CATALOG: one line saying what it does

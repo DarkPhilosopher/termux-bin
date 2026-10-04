@@ -1,0 +1,166 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""Lists and closes Termux sessions/tabs -- reads /proc directly rather
+than shelling out to `ps` (whose exact output format varies), so this
+keeps working regardless of what's installed.
+
+Requested directly: "if termux does not already have a way for me to
+shutdown and detect all list of termux sessions running make a python
+script so it shuts them down which i specify or all at once with or
+without exception of which session i do command from."
+
+Each Termux tab is its own session, rooted in a session LEADER process
+attached to its own real terminal (a /dev/pts/N) -- that's what's
+listed and what gets killed, one entry per tab, not one per process.
+
+    termux-sessions                          list them, numbered, marks yours
+    termux-sessions kill <pid|number|name>    close one -- any of the three
+                                               works: the raw pid, its
+                                               position in the list above
+                                               (e.g. "2"), or its tty name
+                                               (e.g. "pts/1")
+    termux-sessions kill all                  close every OTHER one
+    termux-sessions kill all --include-self   close every one, yours too
+
+"yours" is worked out from this script's own controlling terminal, so
+it only means anything when you actually run this in an ordinary
+interactive Termux session -- something with no real terminal of its
+own (a cron job, a tool invoking this some other way) can't tell which
+one it is, and "all" then just means literally all of them.
+"""
+
+import os
+import signal
+import sys
+
+
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _tty_of(pid):
+    """The real /dev/pts/N a process's stdin is attached to, or None
+    if it has none -- a background or tool-invoked process with no
+    controlling terminal at all, same reason "yours" only resolves
+    correctly when this is run from a normal interactive session."""
+    try:
+        target = os.readlink("/proc/%s/fd/0" % pid)
+    except OSError:
+        return None
+    return target if target.startswith("/dev/pts/") else None
+
+
+def _session_id(pid):
+    stat = _read("/proc/%s/stat" % pid)
+    if not stat:
+        return None
+    try:
+        # Fields after the ")" closing the process name: state, ppid,
+        # pgrp, session, ... -- session is the 4th of those.
+        return stat.rsplit(")", 1)[1].split()[3]
+    except IndexError:
+        return None
+
+
+def find_sessions():
+    """One entry per real Termux session/tab: (session-leader pid, its
+    pts/N). A process is that leader exactly when its own session id
+    equals its own pid."""
+    sessions = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        tty = _tty_of(name)
+        if tty and _session_id(name) == name:
+            sessions.append((name, tty))
+    return sessions
+
+
+def my_tty():
+    return _tty_of("self")
+
+
+def kill_session(pid):
+    """Kills the whole process group the session leader owns, which is
+    usually the whole tab's process tree -- falling back to just the
+    one pid if that's refused (no permission, or it's already gone)."""
+    try:
+        os.killpg(int(pid), signal.SIGKILL)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        os.kill(int(pid), signal.SIGKILL)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _tty_name(tty):
+    """/dev/pts/1 -> pts/1 -- what's actually printed and typed back in;
+    the /dev/ prefix is real but nobody wants to type it twice."""
+    return tty[len("/dev/"):] if tty.startswith("/dev/") else tty
+
+
+def resolve_target(token, sessions):
+    """token is a PID, a 1-based position in the list exactly as
+    printed, or the tty "name" (pts/1, with or without a leading
+    /dev/) -- whichever matches. Returns the (pid, tty) pair, or None."""
+    for pid, tty in sessions:
+        if pid == token:
+            return (pid, tty)
+    if token.isdigit():
+        idx = int(token) - 1
+        if 0 <= idx < len(sessions):
+            return sessions[idx]
+    want = token if token.startswith("/dev/") else "/dev/" + token.lstrip("/")
+    for pid, tty in sessions:
+        if tty == want:
+            return (pid, tty)
+    return None
+
+
+def run(args):
+    sessions = find_sessions()
+    mine = my_tty()
+
+    if not args:
+        if not sessions:
+            print("no termux sessions found")
+            return
+        for i, (pid, tty) in enumerate(sessions, 1):
+            print("%d. pid %-8s %-10s%s" % (i, pid, _tty_name(tty),
+                                             "  <- this one" if tty == mine else ""))
+        return
+
+    if args[0] != "kill" or len(args) < 2:
+        print("usage: termux-sessions")
+        print("       termux-sessions kill <pid|number|name|all> [--include-self]")
+        return
+
+    target = args[1]
+    include_self = "--include-self" in args
+
+    if target == "all":
+        victims = [(pid, tty) for pid, tty in sessions if include_self or tty != mine]
+        if not victims:
+            print("nothing to close" + ("" if include_self else " (excluding this one)"))
+            return
+    else:
+        found = resolve_target(target, sessions)
+        if found is None:
+            print("no session matching '%s' -- run with no arguments to list them "
+                  "(by number, name, or pid all work)" % target)
+            return
+        victims = [found]
+
+    for pid, tty in victims:
+        ok = kill_session(pid)
+        print(("closed " if ok else "couldn't close ") + "%s (%s)" % (pid, _tty_name(tty)))
+
+
+if __name__ == "__main__":
+    run(sys.argv[1:])

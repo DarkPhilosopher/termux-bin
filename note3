@@ -1,0 +1,37 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Posts a Termux notification with exactly three buttons, generic --
+# you say what each one is labeled and what it runs, this just wraps
+# termux-notification's own --button1/2/3 flags so that doesn't need
+# retyping by hand every time. Same --id trick ti.sh/overseer's own
+# notify use: calling this again with the same id updates that one
+# notification in place instead of stacking a new one.
+#
+#     note3 <id> <title> <content> <label1> <action1> <label2> <action2> <label3> <action3>
+#
+# Example -- a notification with Yes/No/Maybe buttons that each just
+# log which one was tapped:
+#
+#     note3 poll "Quick poll" "well?" \
+#       "Yes" 'echo yes >> ~/poll.log' \
+#       "No"  'echo no  >> ~/poll.log' \
+#       "Maybe" 'echo maybe >> ~/poll.log'
+#
+# Each action runs as its own shell command when that button is
+# tapped, exactly like any other termux-notification button-action --
+# it can itself call note3 again (with the same id) to update the
+# notification afterward, the same way overseer's own Reply button
+# re-posts itself after handling what was typed.
+if [ "$#" -ne 9 ]; then
+    echo "usage: note3 <id> <title> <content> <label1> <action1> <label2> <action2> <label3> <action3>" >&2
+    exit 1
+fi
+id="$1"; title="$2"; content="$3"
+label1="$4"; action1="$5"; label2="$6"; action2="$7"; label3="$8"; action3="$9"
+
+termux-notification \
+    --id "$id" \
+    --title "$title" \
+    --content "$content" \
+    --button1 "$label1" --button1-action "$action1" \
+    --button2 "$label2" --button2-action "$action2" \
+    --button3 "$label3" --button3-action "$action3"
