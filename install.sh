@@ -27,6 +27,7 @@ declare -A CATALOG=(
   [programs]="programs -- lists every one of your own commands and starts one -- /help inside it"
   [termux-panel]="termux-panel -- add/remove a swipeable panel of extra keys on Termux's key row"
   [termux-sessions]="termux-sessions -- list/close Termux session tabs (kill <pid>, kill all, or all --include-self)"
+  [timeweather]="timeweather -- shows and logs the current time + weather (wttr.in, no API key)"
 )
 declare -A LAUNCH=(
   [note3]='exec "$HOME/bin/note3" "$@"'
@@ -35,6 +36,7 @@ declare -A LAUNCH=(
   [programs]='exec python3 "$HOME/bin/programs" "$@"'
   [termux-panel]='exec python3 "$HOME/bin/termux-panel" "$@"'
   [termux-sessions]='exec "$HOME/bin/termux-sessions" "$@"'
+  [timeweather]='exec "$HOME/bin/timeweather" "$@"'
 )
 
 made=0

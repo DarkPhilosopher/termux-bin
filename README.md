@@ -42,6 +42,7 @@ still a manual step on each device.
 | `overseer` | One dashboard: numbered menu (`babymenu.py`), `/help`/`/list`/`/open`/`/newsession`/`/sessions`, plus a pinned-notification mode |
 | `programs` | Auto-detecting command lister (scans `$PREFIX/bin` for `# CATALOG:` tags) |
 | `catalog_lib.py` | Shared scanning logic behind `programs`/`overseer` |
+| `timeweather` | Shows + logs the current time and weather (wttr.in, no API key) |
 | `babymenu.py` | The shared numbered-menu pattern (max 8 slots, 7 is always back/exit) |
 | `termux-sessions` | Lists/closes real Termux session tabs — by pid, list position, or tty name |
 | `opensession` | Opens a brand-new, independent Termux session via `RUN_COMMAND` |

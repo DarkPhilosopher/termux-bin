@@ -1,0 +1,25 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Shows the current time and weather together, and logs it -- one of
+# the smaller, concrete items from Gabe's own "Claude WakeUp" planning
+# doc: "claude keep track of time and weather." Uses wttr.in (no API
+# key needed, plain curl, auto-detects location from IP) since
+# Termux:API has no weather command of its own.
+#
+#     timeweather          print it (and log it)
+#     timeweather --quiet  log it only, print nothing (for cron/boot use)
+LOG="$HOME/.timeweather.log"
+FORMAT="%l:+%c+%t+(feels+%f)+humidity+%h+wind+%w"
+
+weather=$(timeout 10 curl -s "wttr.in/?format=$FORMAT" 2>/dev/null)
+now=$(date '+%Y-%m-%d %H:%M:%S %Z')
+
+if [ -z "$weather" ]; then
+  weather="(weather unavailable -- no network, or wttr.in is down)"
+fi
+
+line="$now  $weather"
+echo "$line" >> "$LOG"
+
+if [ "$1" != "--quiet" ]; then
+  echo "$line"
+fi
