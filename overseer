@@ -53,6 +53,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import babymenu  # noqa: E402 -- shared numbered-menu pattern, see its own docstring
 from catalog_lib import format_list, resolve, discover  # noqa: E402 -- shared with `programs`
+import updates_lib  # noqa: E402 -- shared with the bare `updates` command
 
 HELP = [
     "/help                        this list -- /list is numbered, and",
@@ -64,6 +65,8 @@ HELP = [
     "/sessions                    list running claude sessions -- more than",
     "                             one at once is what caused the last freeze",
     "/sessions kill <pid>         close one",
+    "/updates                     check every project here against GitHub",
+    "/updates pull <name|all>     pull one, or every one that's behind",
     "/quit",
     "",
     "(also: any real command's own name works directly too, e.g. just",
@@ -173,6 +176,22 @@ def cmd_sessions(rest):
     return lines
 
 
+def cmd_updates(rest):
+    """/updates (check every repo in updates_lib.REPOS) or
+    /updates pull <name|all>. Same logic the menu's "Check for
+    updates" screen uses -- see updates_lib.py's own docstring for why
+    nothing here runs except when this is actually typed/opened."""
+    rest = rest.strip()
+    if rest.startswith("pull "):
+        target = rest[5:].strip()
+        if target == "all":
+            return updates_lib.pull_all(updates_lib.check_all())
+        if not target:
+            return ["try: /updates pull <name-or-all>"]
+        return updates_lib.pull_one(target)
+    return updates_lib.format_report(updates_lib.check_all())
+
+
 def run_command(said):
     said = said.strip()
     if not said or said == "/":
@@ -190,6 +209,8 @@ def run_command(said):
         return cmd_newsession(rest)
     if word == "sessions":
         return cmd_sessions(rest)
+    if word == "updates":
+        return cmd_updates(rest)
     # Anything else: if it's a real command on PATH, just run it --
     # "spark" launches spark the same way typing it at an ordinary
     # shell prompt would, whether or not it's # CATALOG:-tagged (that
@@ -318,12 +339,46 @@ def _menu_sessions():
                 print(line)
 
 
+def _menu_updates():
+    """Fetch + report every repo in updates_lib.REPOS, then offer to pull
+    whichever ones are behind. The fetch only happens because this screen
+    was actually opened -- see updates_lib's own docstring for why that
+    matters on a phone."""
+    print("checking GitHub...")
+    results = updates_lib.check_all()
+    print("\n".join(updates_lib.format_report(results)))
+    behind = [name for name, status in results.items()
+              if status.get("ok") and status.get("behind", 0) > 0]
+    if not behind:
+        input("\n(enter to go back) ")
+        return
+    options = [("Pull %s" % name, name) for name in behind]
+    if len(behind) > 1:
+        options.append(("Pull all", "all"))
+    while True:
+        action, raw = _menu_screen("Pull which update?", options, has_parent=True)
+        if action == babymenu.BACK:
+            return
+        if action == babymenu.MORE:
+            continue
+        if action == "all":
+            print("\n".join(updates_lib.pull_all(results)))
+            return
+        if action is not None:
+            print("\n".join(updates_lib.pull_one(action)))
+            return
+        if raw.strip():
+            for line in run_command(raw):
+                print(line)
+
+
 def _menu_top():
     options = [
         ("List every command", "list"),
         ("Open a command", "open"),
         ("Open one in a new session", "newsession"),
         ("Claude sessions (close extras)", "sessions"),
+        ("Check for updates", "updates"),
         ("Post the pinned notification", "notify"),
     ]
     while True:
@@ -341,6 +396,8 @@ def _menu_top():
                     print(line)
         elif action == "sessions":
             _menu_sessions()
+        elif action == "updates":
+            _menu_updates()
         elif action == "notify":
             notify_post()
             print("posted")

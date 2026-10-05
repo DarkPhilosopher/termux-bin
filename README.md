@@ -35,14 +35,34 @@ cd ~/bin && git pull && ~/bin/install.sh
 Nothing syncs automatically — pulling (and re-running `install.sh`) is
 still a manual step on each device.
 
+## Checking everything for updates
+
+`updates` doesn't just check this repo — it checks every one of
+Gabe's own GitHub-backed projects at once (Spark, spark2, termux-chat,
+gridplace, termux-link, ASC, and this repo), same as `overseer`'s own
+"Check for updates" menu screen:
+
+```
+updates                   fetch + report every project
+updates pull <name>       fetch + fast-forward just that one
+updates pull all          fetch + fast-forward every one that's behind
+```
+
+Nothing here ever runs on its own — same standing rule Spark's own
+`spark.py update` states for itself: a `git fetch` is a real network
+call on a phone, so this only runs when `updates` (or the menu screen)
+is actually opened, never silently in the background.
+
 ## What's in here
 
 | File | What it is |
 |---|---|
-| `overseer` | One dashboard: numbered menu (`babymenu.py`), `/help`/`/list`/`/open`/`/newsession`/`/sessions`, plus a pinned-notification mode |
+| `overseer` | One dashboard: numbered menu (`babymenu.py`), `/help`/`/list`/`/open`/`/newsession`/`/sessions`/`/updates`, plus a pinned-notification mode |
 | `programs` | Auto-detecting command lister (scans `$PREFIX/bin` for `# CATALOG:` tags) |
 | `catalog_lib.py` | Shared scanning logic behind `programs`/`overseer` |
 | `timeweather` | Shows + logs the current time and weather (wttr.in, no API key) |
+| `updates` | Checks every one of Gabe's GitHub repos for updates, and can pull them — see above |
+| `updates_lib.py` | The check/pull logic behind `updates` and `overseer`'s "Check for updates" screen |
 | `babymenu.py` | The shared numbered-menu pattern (max 8 slots, 7 is always back/exit) |
 | `termux-sessions` | Lists/closes real Termux session tabs — by pid, list position, or tty name |
 | `opensession` | Opens a brand-new, independent Termux session via `RUN_COMMAND` |

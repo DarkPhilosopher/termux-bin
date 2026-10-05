@@ -28,6 +28,7 @@ declare -A CATALOG=(
   [termux-panel]="termux-panel -- add/remove a swipeable panel of extra keys on Termux's key row"
   [termux-sessions]="termux-sessions -- list/close Termux session tabs (kill <pid>, kill all, or all --include-self)"
   [timeweather]="timeweather -- shows and logs the current time + weather (wttr.in, no API key)"
+  [updates]="updates -- check (and pull) GitHub updates for every project here: \`updates\`, \`updates pull <name-or-all>\`"
 )
 declare -A LAUNCH=(
   [note3]='exec "$HOME/bin/note3" "$@"'
@@ -37,6 +38,7 @@ declare -A LAUNCH=(
   [termux-panel]='exec python3 "$HOME/bin/termux-panel" "$@"'
   [termux-sessions]='exec "$HOME/bin/termux-sessions" "$@"'
   [timeweather]='exec "$HOME/bin/timeweather" "$@"'
+  [updates]='exec python3 "$HOME/bin/updates" "$@"'
 )
 
 made=0

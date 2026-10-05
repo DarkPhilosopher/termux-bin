@@ -1,0 +1,39 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""updates -- bare-command entrypoint for updates_lib.py, the same
+check-and-pull logic `overseer`'s "Check for updates" screen uses.
+
+    updates                  fetch + report every known repo
+    updates pull <name>      fetch + fast-forward just that one
+    updates pull all         fetch + fast-forward every repo that's behind
+
+See updates_lib.py's own docstring for the full reasoning -- nothing
+here runs unless this is actually typed, same standing rule Spark's
+own updater.py states for itself.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from updates_lib import check_all, format_report, pull_all, pull_one  # noqa: E402
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        for line in format_report(check_all()):
+            print(line)
+    elif args[0] == "pull" and len(args) > 1:
+        target = args[1]
+        if target == "all":
+            for line in pull_all(check_all()):
+                print(line)
+        else:
+            for line in pull_one(target):
+                print(line)
+    else:
+        sys.exit("try:  updates   or   updates pull <name-or-all>")
+
+
+if __name__ == "__main__":
+    main()
