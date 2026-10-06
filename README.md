@@ -53,6 +53,28 @@ Nothing here ever runs on its own — same standing rule Spark's own
 call on a phone, so this only runs when `updates` (or the menu screen)
 is actually opened, never silently in the background.
 
+## Sorting loose files
+
+`organize-files` sorts a messy folder (Downloads by default) into
+type-based subfolders — Images, Videos, Documents, Archives,
+Installers, Other:
+
+```
+organize-files                 dry run, prints what WOULD happen
+organize-files --apply         actually move the files
+organize-files --undo          reverse the most recent run
+```
+
+**Dry run by default, and every move is logged** so `--undo` can put
+everything back exactly where it was — this never deletes anything,
+only relocates. `DCIM/Camera` and anything under Termux's own home
+are never touched, even if pointed at directly, since Android's
+camera app and photo backup expect `DCIM/Camera` to stay put.
+
+See [fileexplorer](https://github.com/DarkPhilosopher/fileexplorer)
+for a Windows-Explorer-style offline browser for the result — its
+own repo, since it's a small web app rather than a `~/bin` script.
+
 ## What's in here
 
 | File | What it is |
@@ -71,6 +93,7 @@ is actually opened, never silently in the background.
 | `termux-panel` | Adds/removes a swipeable panel of extra keys on Termux's keyboard row |
 | `ti.sh` | Notification-based text input with tmux channel switching |
 | `collect-screenshots.py` | Moves screenshot-like files into one easy-to-browse folder |
+| `organize_files.py` | Sorts loose files into type folders — dry-run by default, see above |
 | `install.sh` | (Re)creates the `$PREFIX/bin` shims for the commands above |
 
 Full history and authorship notes (built with Claude vs. found already
