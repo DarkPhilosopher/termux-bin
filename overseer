@@ -27,7 +27,8 @@ and overseer with everything subordinate"):
 `overseer boot` is the Termux:Boot entry point now too --
 ~/.termux/boot/start-claude.sh just hands off to it, so the boot steps
 live here under overseer rather than in a separate script.
-`overseer wakeup` prints the status board alone and exits.
+`overseer wakeup` prints the status board alone and exits; `wake`
+(its own bare command) opens the Wake up screen directly.
 
 Then, inside it:
 
@@ -588,6 +589,8 @@ def run():
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "boot":
         boot()
+    elif len(sys.argv) >= 2 and sys.argv[1] == "wake":
+        _menu_wakeup()  # the `wake` shortcut -- back exits
     elif len(sys.argv) >= 2 and sys.argv[1] == "wakeup":
         print("\n".join(wakeup_lines()))
     elif len(sys.argv) >= 2 and sys.argv[1] == "notify":
