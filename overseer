@@ -27,8 +27,9 @@ and overseer with everything subordinate"):
 `overseer boot` is the Termux:Boot entry point now too --
 ~/.termux/boot/start-claude.sh just hands off to it, so the boot steps
 live here under overseer rather than in a separate script.
-`overseer wakeup` prints the status board alone and exits; `wake`
-(its own bare command) opens the Wake up screen directly.
+`overseer wakeup` prints the status board alone and exits. Menu 1
+opens `wake` (~/bin/wake, its own program now): check-ins first, then
+what you were doing, device + online diagnostics.
 
 Then, inside it:
 
@@ -359,9 +360,17 @@ def _menu_wakeup():
                 print(line)
 
 
+def read_state(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def boot():
     """Termux:Boot entry point -- start-claude.sh only hands off to this.
-    Same three steps that script always ran, now living under overseer."""
+    The steps that script always ran, plus wake's check-in reminders."""
     # 1. the boot-time claude tmux session inside Ubuntu
     _in_ubuntu("/root/bin/claude-session.sh")
     # 2. voice starts off -- ~/.termux-voice/toggle.sh turns it on
@@ -371,7 +380,12 @@ def boot():
             f.write("off\n")
     except OSError:
         pass
-    # 3. memguard, detached so it outlives this process; skipped if one
+    # 3. wake's 20-min check-in job, if it was on (persisted jobs usually
+    #    survive a reboot already; this makes sure)
+    if read_state(os.path.join(TERMUX_HOME, ".wake", "remind")) == "on":
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(SELF), "wake"), "remind", "on"],
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    # 4. memguard, detached so it outlives this process; skipped if one
     #    is already watching (re-running boot by hand shouldn't stack two)
     if os.path.exists(MEMGUARD) and not _running("memguard.sh"):
         log = open(os.path.join(TERMUX_HOME, ".memguard.log"), "a")
@@ -559,7 +573,7 @@ def _menu_top():
         if action == babymenu.EXIT:
             return
         elif action == "wakeup":
-            _menu_wakeup()
+            subprocess.run([sys.executable, os.path.join(os.path.dirname(SELF), "wake")])
         elif action == "sessions":
             _menu_sessions()
         elif action == "open":
@@ -589,8 +603,6 @@ def run():
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "boot":
         boot()
-    elif len(sys.argv) >= 2 and sys.argv[1] == "wake":
-        _menu_wakeup()  # the `wake` shortcut -- back exits
     elif len(sys.argv) >= 2 and sys.argv[1] == "wakeup":
         print("\n".join(wakeup_lines()))
     elif len(sys.argv) >= 2 and sys.argv[1] == "notify":

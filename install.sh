@@ -23,7 +23,7 @@ BIN="/data/data/com.termux/files/usr/bin"
 declare -A CATALOG=(
   [note3]="note3 -- posts a Termux notification with 3 custom buttons you define"
   [opensession]="opensession -- opens a brand-new, independent Termux session running any command"
-  [wake]="wake -- straight to overseer's Wake up screen: status board, continue Claude, sync, updates"
+  [wake]="wake -- looks after you first: check-ins every 20 min, what you were doing, device + online diagnostics"
   [overseer]="overseer -- one dashboard with /help/list/open/newsession, or \`overseer notify\` for a pinned reply notification"
   [programs]="programs -- lists every one of your own commands and starts one -- /help inside it"
   [termux-panel]="termux-panel -- add/remove a swipeable panel of extra keys on Termux's key row"
@@ -34,7 +34,7 @@ declare -A CATALOG=(
 declare -A LAUNCH=(
   [note3]='exec "$HOME/bin/note3" "$@"'
   [opensession]='exec "$HOME/bin/opensession" "$@"'
-  [wake]='exec python3 "$HOME/bin/overseer" wake'
+  [wake]='exec python3 "$HOME/bin/wake" "$@"'
   [overseer]='exec python3 "$HOME/bin/overseer" "$@"'
   [programs]='exec python3 "$HOME/bin/programs" "$@"'
   [termux-panel]='exec python3 "$HOME/bin/termux-panel" "$@"'
@@ -44,9 +44,7 @@ declare -A LAUNCH=(
 )
 
 # commands that reuse another command's script (default: same name)
-declare -A SOURCE=(
-  [wake]=overseer
-)
+declare -A SOURCE=()
 
 made=0
 for name in "${!LAUNCH[@]}"; do
