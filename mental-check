@@ -3,6 +3,7 @@
 
     mental-check             menu
     mental-check log <text>  save how you feel (notification buttons)
+    mental-check set <text>  same thing (notification Reply button)
     mental-check help        help numbers, as a notification too
     mental-check remind on|off   hourly "how are you feeling?"
 
@@ -48,7 +49,11 @@ def main():
             ("Hourly reminder on/off", toggle),
             ("Help numbers", lambda: w.pager(w.HELP_LINES)),
         ], header=lambda: [w.mental_quick()])
-    elif a[0] == "log":
+    elif a[0] in ("log", "set"):
+        # "set" is what the notification's free-text Reply button sends
+        # ($REPLY substituted in, same wiring task-reminder's Reply
+        # button already uses) -- "log" stays too, for the fixed
+        # Not great / Need help buttons and anyone typing it by hand.
         saved = w.append_log(w.MENTAL_LOG, " ".join(a[1:]))
         w.sh(["termux-notification-remove", "--id", "wake-mental"])
         w.sh(["termux-toast", "mental check saved: " + saved[:60]])

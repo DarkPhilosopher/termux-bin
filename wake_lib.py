@@ -238,7 +238,14 @@ def mental_notify(loud=False):
     cmd = ["termux-notification", "--id", "wake-mental",
            "--title", "are you OK?" if loud else "mental check",
            "--content", ("Nothing answered for over an hour. " if loud else "") + "How are you feeling?"]
-    cmd += _btn(1, "Good", "%s %s log good" % (PY, me))
+    # "Good" dropped in favor of a free-text Reply -- Android caps a
+    # notification at 3 buttons, and typing "good" through Reply covers
+    # that case trivially while also letting anything more specific get
+    # saved (and read back later as the last report) instead of being
+    # forced into one of three fixed words. "Need help" stays a dedicated
+    # button on purpose -- that one's safety-critical, not worth the extra
+    # tap of typing it out.
+    cmd += _btn(1, "Reply", "%s %s set $REPLY" % (PY, me))
     cmd += _btn(2, "Not great", "%s %s log not great" % (PY, me))
     cmd += _btn(3, "Need help", "%s %s help" % (PY, me))
     if loud:
