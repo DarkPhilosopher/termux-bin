@@ -71,3 +71,18 @@ for name in "${!LAUNCH[@]}"; do
   made=$((made + 1))
 done
 echo "wrote $made shim(s) into $BIN"
+
+# wake's summary on every new interactive Termux session -- added once,
+# never duplicated (same block wake's own commit put in ~/.bashrc)
+if ! grep -q "# --- wake:" "$HOME/.bashrc" 2>/dev/null; then
+  cat >> "$HOME/.bashrc" <<'BASHRC'
+
+# --- wake: mental check / task reminder / diagnostics summary ---
+# Shown once per new interactive Termux session (not inside scripts or
+# sessions opened by RUN_COMMAND). 15 s to pick one, enter skips.
+case $- in
+    *i*) [ -t 0 ] && [ -f "$HOME/bin/wake" ] && python3 "$HOME/bin/wake" start ;;
+esac
+BASHRC
+  echo "added wake's startup summary to ~/.bashrc"
+fi
