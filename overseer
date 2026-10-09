@@ -67,6 +67,7 @@ HELP = [
     "/sessions kill <pid>         close one",
     "/updates                     check every project here against GitHub",
     "/updates pull <name|all>     pull one, or every one that's behind",
+    "/feed                        chronological log: git, RAM, sync, more",
     "/quit",
     "",
     "(also: any real command's own name works directly too, e.g. just",
@@ -192,6 +193,14 @@ def cmd_updates(rest):
     return updates_lib.format_report(updates_lib.check_all())
 
 
+def cmd_feed(rest):
+    """/feed [--days N] [--part NAME] -- same report the menu's "Live
+    feed" screen shows, as a slash command."""
+    args = [sys.executable, os.path.join(os.path.dirname(SELF), "feed")] + rest.split()
+    result = subprocess.run(args, capture_output=True, text=True)
+    return (result.stdout + result.stderr).splitlines()
+
+
 def run_command(said):
     said = said.strip()
     if not said or said == "/":
@@ -211,6 +220,8 @@ def run_command(said):
         return cmd_sessions(rest)
     if word == "updates":
         return cmd_updates(rest)
+    if word == "feed":
+        return cmd_feed(rest)
     # Anything else: if it's a real command on PATH, just run it --
     # "spark" launches spark the same way typing it at an ordinary
     # shell prompt would, whether or not it's # CATALOG:-tagged (that
@@ -339,6 +350,14 @@ def _menu_sessions():
                 print(line)
 
 
+def _menu_feed():
+    """Runs `feed` and shows its output. A plain subprocess call, not an
+    import -- feed is a standalone read-only report with nothing to act
+    on afterward (unlike updates, which can also offer a pull)."""
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(SELF), "feed")])
+    input("\n(enter to go back) ")
+
+
 def _menu_updates():
     """Fetch + report every repo in updates_lib.REPOS, then offer to pull
     whichever ones are behind. The fetch only happens because this screen
@@ -379,6 +398,7 @@ def _menu_top():
         ("Open one in a new session", "newsession"),
         ("Claude sessions (close extras)", "sessions"),
         ("Check for updates", "updates"),
+        ("Live feed (git, RAM, sync, more)", "feed"),
         ("Post the pinned notification", "notify"),
     ]
     while True:
@@ -398,6 +418,8 @@ def _menu_top():
             _menu_sessions()
         elif action == "updates":
             _menu_updates()
+        elif action == "feed":
+            _menu_feed()
         elif action == "notify":
             notify_post()
             print("posted")

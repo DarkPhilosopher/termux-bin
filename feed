@@ -1,0 +1,203 @@
+#!/data/data/com.termux/files/usr/bin/python
+"""feed -- a simple, read-only, chronological log of everything already
+tracked across this phone's own tools: git activity per project, RAM
+warnings, weather checks, voice activity, sync pushes, file-organizer
+moves. Nothing here polls or checks anything live -- it just reads logs
+that already exist and shows them, newest first, grouped into parts.
+
+    feed                show everything, every part
+    feed --days 7       only the last 7 days
+    feed --part git     just one part: git/ram/weather/voice/sync/files
+"""
+import argparse
+import json
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+
+HOME = Path.home()
+
+# Every repo-backed project this toolkit knows about -- same list
+# updates_lib.py checks, so "what's in progress" and "what's behind on
+# GitHub" are answering the same question from two different angles.
+REPOS = {
+    "spark": HOME / "spark",
+    "spark2": HOME / "spark2",
+    "termux-chat": HOME / "termux-chat",
+    "gridplace": Path("/sdcard/Download/gridplace"),
+    "termux-link": HOME / "termux-link",
+    "ASC": HOME / "github/termux/android/ASC",
+    "termux-bin": HOME / "bin",
+    "organize-files": HOME / "organize-files",
+    "fileexplorer": HOME / "fileexplorer",
+}
+
+
+def fmt(ts):
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def _parse_stamped_log(path, stamp_len=19):
+    """Most of these logs start every line with `date '+%F %T'` (19
+    chars: "YYYY-MM-DD HH:MM:SS") followed by the rest of the message.
+    One shared parser for all of them."""
+    events = []
+    if not path.exists():
+        return events
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or len(line) < stamp_len:
+            continue
+        try:
+            ts = datetime.strptime(line[:stamp_len], "%Y-%m-%d %H:%M:%S").timestamp()
+        except ValueError:
+            continue
+        events.append((ts, line[stamp_len:].strip()))
+    return events
+
+
+def git_part():
+    events = []
+    for name, path in REPOS.items():
+        if not path.is_dir():
+            continue
+        r = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", str(path),
+             "log", "-n", "20", "--format=%ct|%s"],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            continue
+        for line in r.stdout.strip().splitlines():
+            if "|" not in line:
+                continue
+            ts, subject = line.split("|", 1)
+            try:
+                events.append((int(ts), "%s: %s" % (name, subject)))
+            except ValueError:
+                continue
+    return events
+
+
+def git_uncommitted_part():
+    """Not history -- the actual "something's in progress right now"
+    check: any repo with uncommitted changes, stamped with now."""
+    events = []
+    now = time.time()
+    for name, path in REPOS.items():
+        if not path.is_dir():
+            continue
+        r = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", str(path), "status", "--short"],
+            capture_output=True, text=True)
+        if r.returncode != 0 or not r.stdout.strip():
+            continue
+        n = len(r.stdout.strip().splitlines())
+        events.append((now, "%s has %d uncommitted file%s" %
+                       (name, n, "" if n == 1 else "s")))
+    return events
+
+
+def memguard_part():
+    return _parse_stamped_log(HOME / ".memguard.log")
+
+
+def timeweather_part():
+    return _parse_stamped_log(HOME / ".timeweather.log")
+
+
+def voice_part():
+    return _parse_stamped_log(HOME / ".termux-voice" / "heard.log")
+
+
+def notify_part():
+    return _parse_stamped_log(HOME / ".termux-voice" / "notify.log")
+
+
+def sync_part():
+    """~/.claude lives INSIDE the Ubuntu proot container (see
+    termux-claude-setup), not in plain Termux's own home -- a direct
+    path read only works when feed itself happens to run from inside
+    that same container. From ordinary Termux, bridge through
+    proot-distro to reach it instead."""
+    direct = HOME / ".claude" / "csync-auto.log"
+    if direct.exists():
+        return _parse_stamped_log(direct)
+    try:
+        r = subprocess.run(
+            ["proot-distro", "login", "ubuntu", "--", "cat", "/root/.claude/csync-auto.log"],
+            capture_output=True, text=True)
+    except FileNotFoundError:
+        return []
+    if r.returncode != 0:
+        return []
+    events = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if len(line) < 19:
+            continue
+        try:
+            ts = datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+        except ValueError:
+            continue
+        events.append((ts, line[19:].strip()))
+    return events
+
+
+def files_part():
+    log = HOME / "organize-files" / ".organize_files.log.jsonl"
+    events = []
+    if not log.exists():
+        return events
+    for line in log.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+            events.append((entry["time"], "moved %s -> %s" %
+                           (entry["from"], entry["to"])))
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return events
+
+
+PARTS = {
+    "progress": ("In progress right now", git_uncommitted_part),
+    "git": ("Git history", git_part),
+    "ram": ("RAM warnings", memguard_part),
+    "weather": ("Time + weather checks", timeweather_part),
+    "voice": ("Voice activity", voice_part),
+    "notify": ("Notifications posted", notify_part),
+    "sync": ("claude-sync pushes", sync_part),
+    "files": ("File-organizer moves", files_part),
+}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--days", type=int, default=None,
+                   help="only show the last N days")
+    p.add_argument("--part", choices=list(PARTS), default=None,
+                   help="only show one part")
+    args = p.parse_args()
+
+    cutoff = time.time() - args.days * 86400 if args.days else None
+    parts = {args.part: PARTS[args.part]} if args.part else PARTS
+
+    for key, (title, fn) in parts.items():
+        events = fn()
+        if cutoff:
+            events = [e for e in events if e[0] >= cutoff]
+        events.sort(key=lambda e: e[0], reverse=True)
+        print("== %s ==" % title)
+        if not events:
+            print("  (nothing logged yet)")
+        for ts, text in events:
+            print("  %s  %s" % (fmt(ts), text))
+        print()
+
+
+if __name__ == "__main__":
+    main()

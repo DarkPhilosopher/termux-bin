@@ -29,6 +29,7 @@ declare -A CATALOG=(
   [termux-sessions]="termux-sessions -- list/close Termux session tabs (kill <pid>, kill all, or all --include-self)"
   [timeweather]="timeweather -- shows and logs the current time + weather (wttr.in, no API key)"
   [updates]="updates -- check (and pull) GitHub updates for every project here: \`updates\`, \`updates pull <name-or-all>\`"
+  [feed]="feed -- a chronological read-only log of everything already tracked here: git, RAM warnings, weather, voice, sync, file moves"
 )
 declare -A LAUNCH=(
   [note3]='exec "$HOME/bin/note3" "$@"'
@@ -39,6 +40,7 @@ declare -A LAUNCH=(
   [termux-sessions]='exec "$HOME/bin/termux-sessions" "$@"'
   [timeweather]='exec "$HOME/bin/timeweather" "$@"'
   [updates]='exec python3 "$HOME/bin/updates" "$@"'
+  [feed]='exec python3 "$HOME/bin/feed" "$@"'
 )
 
 made=0
