@@ -1,0 +1,59 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""task-reminder -- what you're doing, and what you were doing.
+
+    task-reminder             menu
+    task-reminder set <text>  log what you're doing (notification Reply)
+    task-reminder same        still doing the same thing
+    task-reminder summary     what you were doing: your log, last Claude
+                              prompts, last commits, newest files
+    task-reminder remind on|off   every 20 min "what are you doing now?"
+
+Part of wake (see wake_lib.py).
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import wake_lib as w  # noqa: E402
+
+
+def update():
+    print("What are you doing now?")
+    try:
+        text = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if text:
+        print("saved: " + w.append_log(w.TASK_LOG, text))
+
+
+def toggle():
+    w.set_on("task-remind", not w.is_on("task-remind"))
+    print("task reminder every %d min: %s" % (w.TICK_MIN, "on" if w.is_on("task-remind") else "off"))
+
+
+def main():
+    a = sys.argv[1:]
+    w._migrate()
+    if not a:
+        w.menu("task reminder", [
+            ("Update what I'm doing", update),
+            ("What was I doing?", lambda: w.pager(w.doing_summary())),
+            ("Reminder every %d min on/off" % w.TICK_MIN, toggle),
+        ], header=lambda: [w.task_quick()])
+    elif a[0] in ("set", "same"):
+        last = w.last_entry(w.TASK_LOG)
+        text = " ".join(a[1:]) if a[0] == "set" else (last[1] if last else "same")
+        saved = w.append_log(w.TASK_LOG, text)
+        w.sh(["termux-notification-remove", "--id", "wake-task"])
+        w.sh(["termux-toast", "task saved: " + saved[:60]])
+    elif a[0] == "summary":
+        print("\n".join(w.doing_summary()))
+    elif a[0] == "remind" and len(a) > 1:
+        w.set_on("task-remind", a[1] == "on")
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

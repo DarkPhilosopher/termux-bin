@@ -458,7 +458,7 @@ def _menu_screen(title, options, has_parent, page=0):
             said = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
-            return (babymenu.EXIT if not has_parent else babymenu.BACK), said
+            return (babymenu.EXIT if not has_parent else babymenu.BACK), ""
         if said.lower() == babymenu.ALL_KEY:
             print("\n".join(babymenu.format_all(options)))
             continue

@@ -1,0 +1,47 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""diagnostics -- everything this phone can report about itself.
+
+    diagnostics           menu
+    diagnostics quick     one line: battery, RAM, claude, memguard
+    diagnostics device    full local report (no network)
+    diagnostics online    internet, public IP, GitHub, Claude API,
+                          weather, download speed (uses network)
+
+Part of wake (see wake_lib.py).
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import wake_lib as w  # noqa: E402
+
+
+def device():
+    print("reading the phone...")
+    w.pager(w.device_report())
+
+
+def online():
+    print("going online (a few seconds)...")
+    if w.pager(w.online_report()) == "8":
+        print(w.lookup_phone())
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        w.menu("diagnostics", [
+            ("Device report", device),
+            ("Online report", online),
+            ("Look this phone up online", lambda: print(w.lookup_phone())),
+        ], header=lambda: [w.diag_quick()])
+    elif a[0] in ("quick", "device", "online"):
+        out = {"quick": lambda: [w.diag_quick()], "device": w.device_report,
+               "online": w.online_report}[a[0]]()
+        print("\n".join(out))
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,69 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""mental-check -- how you're feeling, logged over the day.
+
+    mental-check             menu
+    mental-check log <text>  save how you feel (notification buttons)
+    mental-check help        help numbers, as a notification too
+    mental-check remind on|off   hourly "how are you feeling?"
+
+Part of wake (see wake_lib.py). Cannot call or text anyone.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import wake_lib as w  # noqa: E402
+
+
+def check_in():
+    print("How are you feeling? (good / not great / need help / anything)")
+    try:
+        text = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    saved = w.append_log(w.MENTAL_LOG, text or "ok")
+    print("saved: " + saved)
+    if "help" in saved.lower() or "not" in saved.lower():
+        print("\n".join(w.HELP_LINES))
+
+
+def history():
+    rows = w.read_log(w.MENTAL_LOG, 15)
+    w.pager(["How you've been", ""]
+            + (["  %-14s %s" % (w.ago(t), x) for t, x in reversed(rows)] or ["  no check-ins yet"]))
+
+
+def toggle():
+    w.set_on("mental-remind", not w.is_on("mental-remind"))
+    print("hourly mental check: " + ("on" if w.is_on("mental-remind") else "off"))
+
+
+def main():
+    a = sys.argv[1:]
+    w._migrate()
+    if not a:
+        w.menu("mental check", [
+            ("Check in -- how I feel", check_in),
+            ("How I've been", history),
+            ("Hourly reminder on/off", toggle),
+            ("Help numbers", lambda: w.pager(w.HELP_LINES)),
+        ], header=lambda: [w.mental_quick()])
+    elif a[0] == "log":
+        saved = w.append_log(w.MENTAL_LOG, " ".join(a[1:]))
+        w.sh(["termux-notification-remove", "--id", "wake-mental"])
+        w.sh(["termux-toast", "mental check saved: " + saved[:60]])
+    elif a[0] == "help":
+        w.append_log(w.MENTAL_LOG, "need help")
+        w.sh(["termux-notification-remove", "--id", "wake-mental"])
+        w.help_notify()
+        print("\n".join(w.HELP_LINES))
+    elif a[0] == "remind" and len(a) > 1:
+        w.set_on("mental-remind", a[1] == "on")
+    elif a[0] == "summary":
+        print(w.mental_quick())
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()
