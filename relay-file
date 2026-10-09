@@ -1,0 +1,63 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""relay-file -- a pinned notification whose Reply button saves
+whatever you type to a file (~/.relay/file.log), timestamped, never
+cleared.
+
+    relay-file           post the notification
+    relay-file --stop    take it down
+    relay-file --reply "text"   handle a reply (what the button calls)
+
+If the reply is itself a request to read something aloud, it switches
+to text-to-speech instead of saving -- see relay_lib.py.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import relay_lib as r  # noqa: E402
+
+NOTIFY_ID = "relay-file"
+SELF = os.path.abspath(__file__)
+
+
+def post():
+    r.sh([
+        "termux-notification", "--id", NOTIFY_ID,
+        "--title", "relay: to a file",
+        "--content", "Reply saves what you type to a file",
+        "--button1", "Reply",
+        "--button1-action", "%s --reply $REPLY" % SELF,
+        "--ongoing",
+    ])
+
+
+def stop():
+    r.sh(["termux-notification-remove", "--id", NOTIFY_ID])
+
+
+def handle_reply(text):
+    text = text.strip()
+    if not text:
+        return
+    if r.is_speak_request(text):
+        r.handle_speak_request(text)
+        return
+    r.append_timestamped(r.FILE_LOG, "you", text)
+    r.sh(["termux-toast", "saved: " + text[:60]])
+    post()  # re-post so the notification is ready for the next reply
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        post()
+    elif args[0] == "--stop":
+        stop()
+    elif args[0] == "--reply":
+        handle_reply(" ".join(args[1:]))
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

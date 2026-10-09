@@ -1,0 +1,86 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""relay-claude -- a pinned notification whose Reply button sends
+whatever you type into the running `claude` tmux session (same
+send-keys trick ~/.termux-voice/loop.sh already uses for voice).
+
+    relay-claude           post the notification
+    relay-claude --stop    take it down
+    relay-claude --reply "text"   handle a reply (what the button calls)
+    relay-claude log-claude "text"   log a line as CLAUDE's own side
+                                     (not automatic yet -- see relay_lib.py)
+
+The file Claude would read your latest message from
+(~/.relay/claude-latest.txt) is OVERWRITTEN every time -- cleared and
+replaced with just the new text plus a "xx-xx-xxxx last" stamp, so it
+never re-reads something already seen. Nothing is actually lost: the
+full back-and-forth, both speakers, stays in a separate sibling file
+(~/.relay/claude-history.txt) that's never cleared.
+
+If the reply is itself a request to read something aloud, it switches
+to text-to-speech instead -- see relay_lib.py.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import relay_lib as r  # noqa: E402
+
+NOTIFY_ID = "relay-claude"
+SELF = os.path.abspath(__file__)
+
+
+def post():
+    r.sh([
+        "termux-notification", "--id", NOTIFY_ID,
+        "--title", "relay: to claude",
+        "--content", "Reply sends what you type into the claude session",
+        "--button1", "Reply",
+        "--button1-action", "%s --reply $REPLY" % SELF,
+        "--ongoing",
+    ])
+
+
+def stop():
+    r.sh(["termux-notification-remove", "--id", NOTIFY_ID])
+
+
+def handle_reply(text):
+    text = text.strip()
+    if not text:
+        return
+    if r.is_speak_request(text):
+        r.handle_speak_request(text)
+        return
+    r.ensure_state()
+    with open(r.CLAUDE_LATEST, "w") as f:
+        f.write(text + "\n")
+        f.write("%s last\n" % r.now_stamp())
+    r.append_timestamped(r.CLAUDE_HISTORY, "you", text)
+    r.relay_to_claude_tmux(text)
+    r.sh(["termux-toast", "sent to claude: " + text[:60]])
+    post()
+
+
+def log_claude(text):
+    """So Claude's own side of the conversation CAN be logged -- by
+    hand, or by Claude itself calling this -- since nothing here
+    captures the live tmux pane automatically yet."""
+    r.append_timestamped(r.CLAUDE_HISTORY, "claude", text)
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        post()
+    elif args[0] == "--stop":
+        stop()
+    elif args[0] == "--reply":
+        handle_reply(" ".join(args[1:]))
+    elif args[0] == "log-claude":
+        log_claude(" ".join(args[1:]))
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

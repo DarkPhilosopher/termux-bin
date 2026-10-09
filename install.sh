@@ -34,6 +34,8 @@ declare -A CATALOG=(
   [timeweather]="timeweather -- shows and logs the current time + weather (wttr.in, no API key)"
   [updates]="updates -- check (and pull) GitHub updates for every project here: \`updates\`, \`updates pull <name-or-all>\`"
   [feed]="feed -- a chronological read-only log of everything already tracked here: git, RAM warnings, weather, voice, sync, file moves"
+  [relay-file]="relay-file -- pinned notification: Reply saves what you type to a file"
+  [relay-claude]="relay-claude -- pinned notification: Reply sends what you type into the claude session"
 )
 declare -A LAUNCH=(
   [note3]='exec "$HOME/bin/note3" "$@"'
@@ -49,6 +51,8 @@ declare -A LAUNCH=(
   [timeweather]='exec "$HOME/bin/timeweather" "$@"'
   [updates]='exec python3 "$HOME/bin/updates" "$@"'
   [feed]='exec python3 "$HOME/bin/feed" "$@"'
+  [relay-file]='exec python3 "$HOME/bin/relay-file" "$@"'
+  [relay-claude]='exec python3 "$HOME/bin/relay-claude" "$@"'
 )
 
 # commands that reuse another command's script (default: same name)
