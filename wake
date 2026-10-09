@@ -1,0 +1,54 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""wake -- looks after you first, then the phone. All three parts in one
+place; each is also its own command:
+
+    1. mental check    how you're feeling (`mental-check`)
+    2. task reminder   what you're doing / were doing (`task-reminder`)
+    3. diagnostics     the phone, locally and online (`diagnostics`)
+    4. Claude, sync, updates   (overseer's screen)
+
+    wake           this menu, with all three summaries on top
+    wake start     the summary Termux shows by itself when it opens
+                   (~/.bashrc), 15 s to pick one, then out of the way
+    wake tick      run every 20 min by Android's job scheduler (job
+                   2020, via wake-tick) -- sends whichever reminders
+                   are due; see wake_lib.py
+
+Requested: "its priority to take care of me while i am helpless alone",
+so mental check is first. Cannot call or text anyone: 911 / 988.
+"""
+import os
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import wake_lib as w  # noqa: E402
+
+
+def run(prog):
+    return lambda: subprocess.run([w.PY, os.path.join(HERE, prog)])
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        w.menu("", [
+            ("Mental check", run("mental-check")),
+            ("Task reminder", run("task-reminder")),
+            ("Diagnostics", run("diagnostics")),
+            ("Claude, sync, updates", w.overseer._menu_wakeup),
+        ], header=lambda: ["wake -- " + time.strftime("%a %d %b  %H:%M")] + w.all_quick())
+    elif a[0] == "start":
+        w.startup()
+    elif a[0] == "tick":
+        w.tick()
+    elif a[0] == "board":
+        print("\n".join(w.all_quick()))
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

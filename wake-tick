@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Run every 20 min by Android's job scheduler (termux-job-scheduler,
+# job 2020) -- set up by `wake remind on`. One check-in reminder.
+exec /data/data/com.termux/files/usr/bin/python3 /data/data/com.termux/files/home/bin/wake tick

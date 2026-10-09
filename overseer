@@ -10,6 +10,27 @@ is the fix: a single, clearly-named program to launch first.
 
     overseer
 
+Everything else hangs off it -- the order of its top menu IS the
+hierarchy, most-used first (requested directly: "best format of wakeup
+and overseer with everything subordinate"):
+
+    1. Wake up          status board (claude sessions, free RAM,
+                        memguard, voice, claude-sync) + continue
+                        Claude / sync chats / check updates
+    2. Claude sessions  close extras -- more than one froze the phone
+    3. Open a command
+    4. Open one in a new session
+    5. Check for updates
+    6. Pinned notification   post it or take it down
+    7. exit
+
+`overseer boot` is the Termux:Boot entry point now too --
+~/.termux/boot/start-claude.sh just hands off to it, so the boot steps
+live here under overseer rather than in a separate script.
+`overseer wakeup` prints the status board alone and exits. Menu 1
+opens `wake` (~/bin/wake, its own program now): check-ins first, then
+what you were doing, device + online diagnostics.
+
 Then, inside it:
 
     /help                        this same list -- numbered, so /open
@@ -49,6 +70,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import babymenu  # noqa: E402 -- shared numbered-menu pattern, see its own docstring
@@ -56,6 +78,8 @@ from catalog_lib import format_list, resolve, discover  # noqa: E402 -- shared w
 import updates_lib  # noqa: E402 -- shared with the bare `updates` command
 
 HELP = [
+    "/wakeup                      status board: claude, RAM, memguard,",
+    "                             voice, claude-sync -- all local, no network",
     "/help                        this list -- /list is numbered, and",
     "                             /open takes a number too (or type",
     "                             the number alone, no /open needed)",
@@ -210,6 +234,8 @@ def run_command(said):
     word, _, rest = said.lstrip("/").partition(" ")
     if word == "help":
         return HELP
+    if word == "wakeup":
+        return wakeup_lines()
     if word == "list":
         return format_list()
     if word == "open":
@@ -231,6 +257,151 @@ def run_command(said):
         subprocess.run([word] + rest.split())
         return []
     return ["no such command: /%s -- /help to see what's available" % word]
+
+
+TERMUX_HOME = "/data/data/com.termux/files/home"
+VOICE_STATE = TERMUX_HOME + "/.termux-voice/state"
+MEMGUARD = TERMUX_HOME + "/bin/memguard.sh"
+# claude-sync's repo as seen from plain Termux (the Ubuntu container's
+# /root/.claude) -- read locally only, never fetched, same no-silent-
+# network rule updates_lib follows.
+SYNC_REPO = ("/data/data/com.termux/files/usr/var/lib/proot-distro/"
+             "containers/ubuntu/rootfs/root/.claude")
+LOW_MB = 300  # same threshold memguard.sh warns at
+
+
+def _free_mb():
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _running(pattern):
+    try:
+        out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+    except FileNotFoundError:
+        return False
+    return bool(out.stdout.strip())
+
+
+def _sync_status():
+    if not os.path.isdir(os.path.join(SYNC_REPO, ".git")):
+        return "not set up on this phone"
+    def g(*args):
+        try:
+            out = subprocess.run(["git", "-c", "safe.directory=*", "-C", SYNC_REPO] + list(args),
+                                 capture_output=True, text=True, timeout=15)
+            return out.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+    last = g("log", "-1", "--format=%cr") or "?"
+    ahead = g("rev-list", "--count", "@{u}..HEAD")
+    dirty = g("status", "--porcelain")
+    pending = (ahead not in ("", "0")) or bool(dirty)
+    return "last commit %s%s" % (last, "  <- not pushed yet (wake up > sync)" if pending else "")
+
+
+def wakeup_lines():
+    """The status board -- everything here is read locally, nothing
+    touches the network, so opening it is always instant and free."""
+    pids = _live_claude_pids() or []
+    free = _free_mb()
+    if not pids:
+        claude = "not running"
+    else:
+        claude = "%d running" % len(pids)
+        if len(pids) > 1:
+            claude += "  <- close extras (menu 2)"
+    if free is None:
+        mem = "unknown"
+    else:
+        mem = "%dMB free%s" % (free, "  <- low" if free < LOW_MB else "")
+    try:
+        with open(VOICE_STATE) as f:
+            voice = f.read().strip() or "?"
+    except OSError:
+        voice = "not set up"
+    return [
+        time.strftime("%a %d %b  %H:%M"),
+        "claude    " + claude,
+        "memory    " + mem,
+        "memguard  " + ("watching" if _running("memguard.sh") else "not running"),
+        "voice     " + voice,
+        "sync      " + _sync_status(),
+    ]
+
+
+def _in_ubuntu(*cmd):
+    """Runs a command inside the Ubuntu container from plain Termux."""
+    if not shutil.which("proot-distro"):
+        return ["proot-distro not found -- run overseer from plain Termux, not inside Ubuntu"]
+    subprocess.run(["proot-distro", "login", "ubuntu", "--"] + list(cmd))
+    return []
+
+
+def _menu_wakeup():
+    options = [
+        ("Continue Claude (new session)", "claude"),
+        ("Sync Claude chats now", "sync"),
+        ("Check for updates", "updates"),
+    ]
+    while True:
+        print("\n".join(wakeup_lines()))
+        action, raw = _menu_screen("Wake up", options, has_parent=True)
+        if action == babymenu.BACK:
+            return
+        if action == "claude":
+            if _live_claude_pids():
+                print("claude is already running -- one at a time (menu 2 to close extras)")
+            else:
+                for line in cmd_newsession("proot-distro login ubuntu -- cl"):
+                    print(line)
+        elif action == "sync":
+            for line in _in_ubuntu("csync", "push"):
+                print(line)
+        elif action == "updates":
+            _menu_updates()
+        elif raw.strip():
+            for line in run_command(raw):
+                print(line)
+
+
+def read_state(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def boot():
+    """Termux:Boot entry point -- start-claude.sh only hands off to this.
+    The steps that script always ran, plus wake's check-in reminders."""
+    # 1. the boot-time claude tmux session inside Ubuntu
+    _in_ubuntu("/root/bin/claude-session.sh")
+    # 2. voice starts off -- ~/.termux-voice/toggle.sh turns it on
+    try:
+        os.makedirs(os.path.dirname(VOICE_STATE), exist_ok=True)
+        with open(VOICE_STATE, "w") as f:
+            f.write("off\n")
+    except OSError:
+        pass
+    # 3. wake's 20-min check-in job, if it was on (persisted jobs usually
+    #    survive a reboot already; this makes sure)
+    if read_state(os.path.join(TERMUX_HOME, ".wake", "remind")) == "on":
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(SELF), "wake"), "remind", "on"],
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    # 4. memguard, detached so it outlives this process; skipped if one
+    #    is already watching (re-running boot by hand shouldn't stack two)
+    if os.path.exists(MEMGUARD) and not _running("memguard.sh"):
+        log = open(os.path.join(TERMUX_HOME, ".memguard.log"), "a")
+        subprocess.Popen([MEMGUARD], stdout=log, stderr=log,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
 
 
 NOTIFY_ID = "overseer"
@@ -298,7 +469,7 @@ def _menu_screen(title, options, has_parent, page=0):
             said = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
-            return (babymenu.EXIT if not has_parent else babymenu.BACK), said
+            return (babymenu.EXIT if not has_parent else babymenu.BACK), ""
         if said.lower() == babymenu.ALL_KEY:
             print("\n".join(babymenu.format_all(options)))
             continue
@@ -391,22 +562,40 @@ def _menu_updates():
                 print(line)
 
 
+def _menu_notify():
+    options = [("Post it", "post"), ("Take it down", "stop")]
+    action, _ = _menu_screen("Pinned notification", options, has_parent=True)
+    if action == "post":
+        notify_post()
+        print("posted")
+    elif action == "stop":
+        notify_stop()
+        print("removed")
+
+
 def _menu_top():
     options = [
-        ("List every command", "list"),
+        ("Wake up", "wakeup"),
+        ("Claude sessions (close extras)", "sessions"),
         ("Open a command", "open"),
         ("Open one in a new session", "newsession"),
-        ("Claude sessions (close extras)", "sessions"),
         ("Check for updates", "updates"),
         ("Live feed (git, RAM, sync, more)", "feed"),
-        ("Post the pinned notification", "notify"),
+        ("Pinned notification", "notify"),
     ]
     while True:
-        action, raw = _menu_screen("overseer", options, has_parent=False)
+        pids = _live_claude_pids() or []
+        free = _free_mb()
+        title = "overseer -- claude %s%s" % (
+            "x%d" % len(pids) if pids else "off",
+            ", %dMB free" % free if free is not None else "")
+        action, raw = _menu_screen(title, options, has_parent=False)
         if action == babymenu.EXIT:
             return
-        elif action == "list":
-            print("\n".join(format_list()))
+        elif action == "wakeup":
+            subprocess.run([sys.executable, os.path.join(os.path.dirname(SELF), "wake")])
+        elif action == "sessions":
+            _menu_sessions()
         elif action == "open":
             _menu_open_command()
         elif action == "newsession":
@@ -414,15 +603,12 @@ def _menu_top():
             if cmdline:
                 for line in cmd_newsession(cmdline):
                     print(line)
-        elif action == "sessions":
-            _menu_sessions()
         elif action == "updates":
             _menu_updates()
         elif action == "feed":
             _menu_feed()
         elif action == "notify":
-            notify_post()
-            print("posted")
+            _menu_notify()
         elif raw.strip():
             word = raw.strip().lstrip("/").split(None, 1)[0].lower()
             if word in ("quit", "q"):
@@ -437,7 +623,11 @@ def run():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "notify":
+    if len(sys.argv) >= 2 and sys.argv[1] == "boot":
+        boot()
+    elif len(sys.argv) >= 2 and sys.argv[1] == "wakeup":
+        print("\n".join(wakeup_lines()))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "notify":
         if len(sys.argv) >= 3 and sys.argv[2] == "--reply":
             notify_reply(" ".join(sys.argv[3:]))
         elif len(sys.argv) >= 3 and sys.argv[2] == "--stop":
