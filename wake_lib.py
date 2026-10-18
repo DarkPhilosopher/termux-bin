@@ -321,10 +321,20 @@ def diag_quick():
     return line
 
 
+def memory_quick():
+    """Local-only, like diag_quick() -- reuses overseer's own
+    _sync_status() (already local-only, already correct) rather than
+    re-deriving "how stale is claude-sync" a second way. The online
+    half is a nudge, not an automatic check -- a `git fetch` on every
+    Termux open would be the exact silent-background-network-call
+    thing `updates`/Spark's own updater both explicitly refuse to do."""
+    return "memory    %s | online: `updates` or `feed` to check what's new" % overseer._sync_status()
+
+
 def all_quick():
     _migrate()
-    with concurrent.futures.ThreadPoolExecutor(3) as ex:
-        parts = [ex.submit(f) for f in (mental_quick, task_quick, diag_quick)]
+    with concurrent.futures.ThreadPoolExecutor(4) as ex:
+        parts = [ex.submit(f) for f in (mental_quick, task_quick, memory_quick, diag_quick)]
     return [p.result() for p in parts]
 
 
