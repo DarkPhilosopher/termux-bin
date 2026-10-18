@@ -149,9 +149,11 @@ def _btn(n, label, action):
 def notify(title, content, playing, first=False):
     cmd = ["termux-notification", "--id", NOTIFY_ID, "--title", title,
            "--content", content[:500], "--ongoing", "--alert-once"]
-    cmd += _btn(1, "Pause" if playing else "Play", "%s %s toggle" % (PY, SELF))
-    cmd += _btn(2, "Reply", "%s %s goto $REPLY" % (PY, SELF))
-    cmd += _btn(3, "Off", "%s %s off" % (PY, SELF))
+    act = lambda label, c: notify_lib.action("readout", label, "%s %s %s" % (PY, SELF, c))
+    notify_lib.remember("readout", title, content)
+    cmd += _btn(1, "Pause" if playing else "Play", act("Pause" if playing else "Play", "toggle"))
+    cmd += _btn(2, "Reply", act("Reply", "goto $REPLY"))
+    cmd += _btn(3, "Off", act("Off", "off"))
     if first:
         cmd += notify_lib.vibrate_args(reply=True)
     # fire and forget -- never let the notification slow the reading down
@@ -168,6 +170,11 @@ def speak(text, stream):
 
 
 # ---------------------------------------------------------------- reader
+
+def clear_notification():
+    subprocess.run(["termux-notification-remove", "--id", NOTIFY_ID],
+                   stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+
 
 def running_pid():
     try:
@@ -287,6 +294,10 @@ def handle_reply(text):
     elif words[0] in ("later", "sleep") and len(words) > 1:
         cmd_later(words[1:])
     else:
+        try:  # check it first -- a typo shouldn't start reading somewhere random
+            resolve(words[0], messages())
+        except ValueError as e:
+            sys.exit("readout: %s -- reply a number like 12, 12.3 or -1" % e)
         print(start({"goto": words[0]}))
 
 
@@ -306,13 +317,20 @@ def main():
     cmd = a[0] if a else "help"
     if cmd == "_daemon":
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
-        daemon()
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        try:
+            daemon()
+        finally:  # whatever ends the reader, don't leave a dead notification
+            clear_notification()
     elif cmd == "list":
         print(cmd_list(int(a[1]) if len(a) > 1 and a[1].isdigit() else 15))
     elif cmd == "on":
         print(start({"goto": a[1] if len(a) > 1 else "last"}))
     elif cmd == "off":
+        # always clear the notification too -- if the reader died, Off must
+        # still make it go away instead of looking like a dead button
         print(start({"off": True}) if running_pid() else "readout: not running")
+        clear_notification()
     elif cmd == "toggle":
         print(start({"toggle": True}) if running_pid() else start({"goto": "last"}))
     elif cmd == "goto":

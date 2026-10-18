@@ -36,7 +36,7 @@ def post():
         "--title", "relay: to claude",
         "--content", "Reply sends what you type into the claude session",
         "--button1", "Reply",
-        "--button1-action", "%s --reply $REPLY" % SELF,
+        "--button1-action", notify_lib.action("relay-claude", "Reply", "%s %s --reply $REPLY" % (sys.executable, SELF)),
         "--ongoing", "--alert-once",
     ] + notify_lib.vibrate_args(reply=True))
 

@@ -416,6 +416,7 @@ SELF = os.path.abspath(__file__)
 
 
 def notify_post(content=None):
+    notify_lib.remember("overseer", "overseer", content or "type a command below")
     try:
         subprocess.run([
             "termux-notification", "--id", NOTIFY_ID,
@@ -430,7 +431,7 @@ def notify_post(content=None):
             # absolute path (not the bare `overseer` command, which needs
             # PATH set up -- ti.sh's $SELF is absolute for the same
             # reason) and no quotes around $REPLY (ti.sh has none either).
-            "--button1-action", "%s notify --reply $REPLY" % SELF,
+            "--button1-action", notify_lib.action("overseer", "Reply", "%s %s notify --reply $REPLY" % (sys.executable, SELF)),
             "--ongoing", "--alert-once",
         ] + notify_lib.vibrate_args(reply=True), check=True)
     except FileNotFoundError:

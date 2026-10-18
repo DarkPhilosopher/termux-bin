@@ -27,7 +27,7 @@ def post():
         "--title", "relay: to a file",
         "--content", "Reply saves what you type to a file",
         "--button1", "Reply",
-        "--button1-action", "%s --reply $REPLY" % SELF,
+        "--button1-action", notify_lib.action("relay-file", "Reply", "%s %s --reply $REPLY" % (sys.executable, SELF)),
         "--ongoing", "--alert-once",
     ] + notify_lib.vibrate_args(reply=True))
 

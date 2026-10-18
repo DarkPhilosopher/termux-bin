@@ -237,11 +237,13 @@ def task_notify():
     if last:
         content = "Last: %s (%s). What are you doing now?" % (last[1], ago(last[0]))
     me = os.path.join(HERE, "task-reminder")
+    act = lambda label, cmd: notify_lib.action("task-reminder", label, "%s %s %s" % (PY, me, cmd))
+    notify_lib.remember("task-reminder", "task reminder", content)
     sh(["termux-notification", "--id", "wake-task", "--title", "task reminder",
         "--content", content[:1000]]
-       + _btn(1, "Reply", "%s %s set $REPLY" % (PY, me))
-       + _btn(2, "Same thing", "%s %s same" % (PY, me))
-       + _btn(3, "Pause", "%s %s remind off" % (PY, me))
+       + _btn(1, "Reply", act("Reply", "set $REPLY"))
+       + _btn(2, "Same thing", act("Same thing", "same"))
+       + _btn(3, "Pause", act("Pause", "remind off"))
        + notify_lib.vibrate_args(reply=True), 20)
 
 
@@ -257,9 +259,11 @@ def mental_notify(loud=False):
     # forced into one of three fixed words. "Need help" stays a dedicated
     # button on purpose -- that one's safety-critical, not worth the extra
     # tap of typing it out.
-    cmd += _btn(1, "Reply", "%s %s set $REPLY" % (PY, me))
-    cmd += _btn(2, "Not great", "%s %s log not great" % (PY, me))
-    cmd += _btn(3, "Need help", "%s %s help" % (PY, me))
+    act = lambda label, c: notify_lib.action("mental-check", label, "%s %s %s" % (PY, me, c))
+    notify_lib.remember("mental-check", cmd[4], cmd[6])
+    cmd += _btn(1, "Reply", act("Reply", "set $REPLY"))
+    cmd += _btn(2, "Not great", act("Not great", "log not great"))
+    cmd += _btn(3, "Need help", act("Need help", "help"))
     if loud:  # always vibrates, whatever `vibrate` is set to
         cmd += ["--priority", "max", "--sound", "--vibrate", "600,300,600,300,600"]
     else:

@@ -63,9 +63,9 @@ post() {
     termux-notification --id ti \
         --title "Termux: ${ch:-no session}" \
         --content "$hist" \
-        --button1 "<-" --button1-action "$SELF --prev" \
-        --button2 "Reply" --button2-action "$SELF --reply \$REPLY" \
-        --button3 "->" --button3-action "$SELF --next" \
+        --button1 "<-" --button1-action "/data/data/com.termux/files/usr/bin/python3 $HOME/bin/notify_lib.py run ti Prev -- $SELF --prev" \
+        --button2 "Reply" --button2-action "/data/data/com.termux/files/usr/bin/python3 $HOME/bin/notify_lib.py run ti Reply -- $SELF --reply \$REPLY" \
+        --button3 "->" --button3-action "/data/data/com.termux/files/usr/bin/python3 $HOME/bin/notify_lib.py run ti Next -- $SELF --next" \
         --ongoing --alert-once \
         $(python3 "$HOME/bin/notify_lib.py" args reply 2>/dev/null)
 }
