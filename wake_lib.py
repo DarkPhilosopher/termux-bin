@@ -27,6 +27,7 @@ import glob
 import importlib.machinery
 import json
 import os
+import re
 import select
 import socket
 import subprocess
@@ -150,8 +151,17 @@ def last_entry(path):
     return rows[0] if rows else None
 
 
+# "[1.0]> " showed up glued to the front of a notification reply on the
+# A33 (not added by anything here) -- strip any such prompt prefix
+_PROMPT_PREFIX = re.compile(r"^(\[[0-9.]+\]>\s*)+")
+
+
+def clean_text(text):
+    return _PROMPT_PREFIX.sub("", " ".join(text.split()))
+
+
 def append_log(path, text):
-    text = " ".join(text.split()) or "ok"
+    text = clean_text(text) or "ok"
     os.makedirs(STATE, exist_ok=True)
     with open(path, "a") as f:
         f.write("%d\t%s\n" % (time.time(), text))
@@ -429,8 +439,10 @@ def _cpu():
     clusters = ", ".join("%dx %.2fGHz" % (maxes.count(m), m / 1000)
                          for m in sorted(set(maxes), reverse=True)) if maxes else "?"
     chip = prop("ro.soc.model") or prop("ro.board.platform") or prop("ro.hardware")
+    # Android hides /proc/loadavg from apps -- leave load out rather than "?"
     load = read("/proc/loadavg").split()[:3]
-    return ["cpu       %s, %d cores (%s), load %s" % (chip or "?", cores, clusters, " ".join(load) or "?")]
+    return ["cpu       %s, %d cores (%s)%s" % (chip or "?", cores, clusters,
+                                              ", load " + " ".join(load) if load else "")]
 
 
 def _memory():
@@ -526,8 +538,13 @@ def _claude():
 
 
 def device_report():
-    up = read("/proc/uptime").split()
-    up_h = float(up[0]) / 3600 if up else 0
+    # the boot clock first: Android hides /proc/uptime (showed "up 0d 0h")
+    try:
+        up_s = time.clock_gettime(time.CLOCK_BOOTTIME)
+    except (AttributeError, OSError):
+        up = read("/proc/uptime").split()
+        up_s = float(up[0]) if up else None
+    up_h = (up_s or 0) / 3600
     head = [
         "Device diagnostics",
         "",
@@ -535,7 +552,8 @@ def device_report():
         "android   %s (SDK %s), security patch %s, build %s" % (
             prop("ro.build.version.release"), prop("ro.build.version.sdk"),
             prop("ro.build.version.security_patch"), prop("ro.build.display.id")),
-        "kernel    %s %s, up %dd %dh" % (os.uname().release, os.uname().machine, up_h // 24, up_h % 24),
+        "kernel    %s %s%s" % (os.uname().release, os.uname().machine,
+                               ", up %dd %dh" % (up_h // 24, up_h % 24) if up_s else ""),
     ]
     # the slow Termux:API calls run side by side
     parts = [_battery, _cpu, _memory, _storage, _thermal, _network_local,
@@ -610,8 +628,10 @@ def online_report():
 
 
 def lookup_phone():
+    # GSMArena's search found nothing for "samsung SM-A336M"; Google
+    # resolves the model code to the phone (Galaxy A33 5G) and its specs
     model = (prop("ro.product.manufacturer") + " " + prop("ro.product.model")).strip()
-    url = "https://www.gsmarena.com/results.php3?sQuickSearch=yes&sName=" + urllib.request.quote(model)
+    url = "https://www.google.com/search?q=" + urllib.request.quote(model + " specs")
     sh(["termux-open-url", url], 15)
     return "opened " + url
 
