@@ -76,6 +76,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import babymenu  # noqa: E402 -- shared numbered-menu pattern, see its own docstring
 from catalog_lib import format_list, resolve, discover  # noqa: E402 -- shared with `programs`
 import updates_lib  # noqa: E402 -- shared with the bare `updates` command
+import notify_lib  # noqa: E402 -- shared vibrate setting
 
 HELP = [
     "/wakeup                      status board: claude, RAM, memguard,",
@@ -430,8 +431,8 @@ def notify_post(content=None):
             # PATH set up -- ti.sh's $SELF is absolute for the same
             # reason) and no quotes around $REPLY (ti.sh has none either).
             "--button1-action", "%s notify --reply $REPLY" % SELF,
-            "--ongoing",
-        ], check=True)
+            "--ongoing", "--alert-once",
+        ] + notify_lib.vibrate_args(reply=True), check=True)
     except FileNotFoundError:
         print("termux-notification not found -- needs Termux:API "
               "(pkg install termux-api, plus the Termux:API app)")

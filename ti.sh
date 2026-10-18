@@ -66,7 +66,8 @@ post() {
         --button1 "<-" --button1-action "$SELF --prev" \
         --button2 "Reply" --button2-action "$SELF --reply \$REPLY" \
         --button3 "->" --button3-action "$SELF --next" \
-        --ongoing
+        --ongoing --alert-once \
+        $(python3 "$HOME/bin/notify_lib.py" args reply 2>/dev/null)
 }
 
 case "${1:-}" in

@@ -1,0 +1,337 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""readout -- reads this Claude conversation out loud, from the file
+Claude Code already saves (~/.claude/projects/-root/<session>.jsonl).
+Plain Python + the phone's own text-to-speech: it never calls Claude
+or `ask`, so it costs no tokens and works offline.
+
+    readout list [n]        numbered messages (last n, default 15)
+    readout on [N]          start reading from message N (default: the
+                            last Claude message), keeps following new ones
+    readout off             stop, remove the notification
+    readout toggle          play / pause (pauses after the current sentence)
+    readout goto N          jump -- what the notification's Reply runs
+    readout later MIN [N]   sleep, start reading in MIN minutes
+    readout stream S        which volume it uses: ALARM (default -- your
+                            media volume is often 0), MUSIC, NOTIFICATION
+    readout status
+
+N:  12 = message 12,  12.3 = message 12 from its 3rd sentence,
+    -1 = the last message, -2 = the one before.
+
+Notification buttons: Play/Pause, Reply (type N, "off", or "later 30"),
+Off. Vibrates per the shared `vibrate` setting (notify_lib.py).
+"""
+import glob
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SELF = os.path.abspath(__file__)
+sys.path.insert(0, HERE)
+import notify_lib  # noqa: E402
+
+PY = "/data/data/com.termux/files/usr/bin/python3"
+ROOTFS = "/data/data/com.termux/files/usr/var/lib/proot-distro/containers/ubuntu/rootfs"
+PROJECTS = [ROOTFS + "/root/.claude/projects", "/root/.claude/projects"]
+STATE = os.path.expanduser("~/.readout")
+CONTROL = os.path.join(STATE, "control.json")   # what the buttons ask for
+STATUS = os.path.join(STATE, "status.json")     # where the reader is
+PIDFILE = os.path.join(STATE, "pid")
+SETTINGS = os.path.join(STATE, "settings.json")
+NOTIFY_ID = "readout"
+
+
+# ---------------------------------------------------------------- files
+
+def jload(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def jsave(path, data):
+    os.makedirs(STATE, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def transcript():
+    """Newest saved Claude conversation."""
+    files = []
+    for d in PROJECTS:
+        files += glob.glob(d + "/*/*.jsonl")
+    return max(files, key=os.path.getmtime) if files else None
+
+
+# ---------------------------------------------------------------- messages
+
+def _clean(text):
+    """Markdown -> something worth hearing."""
+    text = re.sub(r"```.*?```", " (code block skipped.) ", text, flags=re.S)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)          # [x](url) -> x
+    text = re.sub(r"https?://\S+", "a link", text)
+    text = re.sub(r"^\s*\|?[-:| ]+\|[-:| ]*$", "", text, flags=re.M)  # table rules
+    text = text.replace("|", ", ")
+    text = re.sub(r"[`*_#>]+", "", text)
+    return text
+
+
+def sentences(text):
+    parts = re.split(r"(?<=[.!?])\s+|\n+", _clean(text))
+    return [p.strip(" ,") for p in parts if len(p.strip(" ,")) > 1]
+
+
+def messages(path=None):
+    """[(speaker, text)], numbered from 1. Your messages and Claude's
+    replies only -- tool calls, tool output and system notes are left out.
+    Back-to-back pieces from the same speaker join into one message."""
+    path = path or transcript()
+    out = []
+    if not path:
+        return out
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("isSidechain") or d.get("isMeta") or d.get("type") not in ("user", "assistant"):
+                continue
+            content = (d.get("message") or {}).get("content")
+            if isinstance(content, str):
+                texts = [content]
+            elif isinstance(content, list):
+                texts = [b.get("text", "") for b in content if b.get("type") == "text"]
+            else:
+                continue
+            speaker = "you" if d["type"] == "user" else "claude"
+            text = "\n".join(t for t in texts if t.strip() and not t.lstrip().startswith("<"))
+            if not text.strip():
+                continue
+            if out and out[-1][0] == speaker:
+                out[-1] = (speaker, out[-1][1] + "\n" + text)
+            else:
+                out.append((speaker, text))
+    return out
+
+
+def resolve(spec, msgs):
+    """'12' / '12.3' / '-1' / 'last' -> (message index 0-based, sentence 0-based)."""
+    spec = str(spec).strip().lower()
+    if spec in ("", "last"):
+        idx = max((i for i, (s, _) in enumerate(msgs) if s == "claude"), default=len(msgs) - 1)
+        return max(idx, 0), 0
+    m = re.fullmatch(r"(-?\d+)(?:\.(\d+))?", spec)
+    if not m:
+        raise ValueError("not a message number: " + spec)
+    n, sent = int(m.group(1)), int(m.group(2) or 1)
+    idx = n - 1 if n > 0 else len(msgs) + n
+    if not 0 <= idx < len(msgs):
+        raise ValueError("no message %s (there are %d)" % (n, len(msgs)))
+    return idx, max(sent - 1, 0)
+
+
+# ---------------------------------------------------------------- notification
+
+def _btn(n, label, action):
+    return ["--button%d" % n, label, "--button%d-action" % n, action]
+
+
+def notify(title, content, playing, first=False):
+    cmd = ["termux-notification", "--id", NOTIFY_ID, "--title", title,
+           "--content", content[:500], "--ongoing", "--alert-once"]
+    cmd += _btn(1, "Pause" if playing else "Play", "%s %s toggle" % (PY, SELF))
+    cmd += _btn(2, "Reply", "%s %s goto $REPLY" % (PY, SELF))
+    cmd += _btn(3, "Off", "%s %s off" % (PY, SELF))
+    if first:
+        cmd += notify_lib.vibrate_args(reply=True)
+    # fire and forget -- never let the notification slow the reading down
+    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
+
+
+def speak(text, stream):
+    try:
+        subprocess.run(["termux-tts-speak", "-s", stream, text],
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        time.sleep(1)
+
+
+# ---------------------------------------------------------------- reader
+
+def running_pid():
+    try:
+        pid = int(open(PIDFILE).read())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def daemon():
+    """The reader. Takes orders from CONTROL between sentences."""
+    with open(PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
+    stream = jload(SETTINGS, {}).get("stream", "ALARM")
+    msgs = messages()
+    ctl = jload(CONTROL, {})
+    try:
+        idx, sent = resolve(ctl.get("goto", "last"), msgs)
+    except ValueError:
+        idx, sent = resolve("last", msgs)
+    playing, wake_at, first = True, ctl.get("wake_at"), True
+    jsave(CONTROL, {})
+    while True:
+        ctl = jload(CONTROL, {})
+        if ctl:
+            jsave(CONTROL, {})
+            if ctl.get("off"):
+                break
+            if "toggle" in ctl:
+                if wake_at:          # Play while sleeping = start now
+                    wake_at, playing = None, True
+                else:
+                    playing = not playing
+            if "goto" in ctl:
+                msgs = messages()
+                try:
+                    idx, sent = resolve(ctl["goto"], msgs)
+                    playing, wake_at = True, None
+                except ValueError as e:
+                    notify("readout", str(e), playing)
+            if "wake_at" in ctl:
+                wake_at = ctl["wake_at"]
+        if wake_at:
+            if time.time() < wake_at:
+                notify("readout: sleeping", "starts reading at %s -- Play to start now"
+                       % time.strftime("%H:%M", time.localtime(wake_at)), False, first)
+                first = False
+                time.sleep(5)
+                continue
+            wake_at, playing = None, True
+        if not playing:
+            notify("readout: paused at #%d" % (idx + 1), "Play to continue", False)
+            time.sleep(1)
+            continue
+        if idx >= len(msgs):
+            # reached the end: follow the conversation as it grows
+            notify("readout: caught up", "waiting for new messages -- Reply a number to re-read", True, first)
+            first = False
+            time.sleep(4)
+            msgs = messages()
+            continue
+        speaker, text = msgs[idx]
+        parts = sentences(text) or ["(empty)"]
+        if sent == 0:
+            parts = ["%s says:" % ("You" if speaker == "you" else "Claude")] + parts
+        if sent >= len(parts):
+            idx, sent = idx + 1, 0
+            continue
+        notify("readout: #%d %s (%d/%d)" % (idx + 1, speaker, sent + 1, len(parts)),
+               parts[sent], True, first)
+        first = False
+        jsave(STATUS, {"message": idx + 1, "sentence": sent + 1, "of": len(msgs)})
+        speak(parts[sent], stream)
+        sent += 1
+    subprocess.run(["termux-notification-remove", "--id", NOTIFY_ID],
+                   stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+    for p in (PIDFILE, CONTROL):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+def start(ctl):
+    """Hand an order to the running reader, or start one with it."""
+    jsave(CONTROL, ctl)
+    if running_pid():
+        return "readout: sent to the running reader"
+    subprocess.Popen([PY, SELF, "_daemon"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    return "readout: started"
+
+
+# ---------------------------------------------------------------- commands
+
+def cmd_list(n=15):
+    msgs = messages()
+    if not msgs:
+        return "no saved conversation found"
+    lines = ["%s  (%d messages)" % (os.path.basename(transcript()), len(msgs))]
+    for i, (speaker, text) in enumerate(msgs[-n:], len(msgs) - min(n, len(msgs)) + 1):
+        lines.append("%4d %-6s %s" % (i, speaker, " ".join(text.split())[:60]))
+    return "\n".join(lines)
+
+
+def handle_reply(text):
+    """What the notification's Reply button sends: a number, or a word."""
+    words = text.strip().lower().split()
+    if not words:
+        return
+    if words[0] in ("off", "stop"):
+        print(start({"off": True}) if running_pid() else "not running")
+    elif words[0] in ("pause", "play", "p"):
+        print(start({"toggle": True}))
+    elif words[0] in ("later", "sleep") and len(words) > 1:
+        cmd_later(words[1:])
+    else:
+        print(start({"goto": words[0]}))
+
+
+def cmd_later(args):
+    try:
+        minutes = float(args[0])
+    except (IndexError, ValueError):
+        sys.exit("try: readout later 30 [message]")
+    ctl = {"wake_at": time.time() + minutes * 60}
+    if len(args) > 1:
+        ctl["goto"] = args[1]
+    print(start(ctl), "-- sleeping %g min" % minutes)
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else "help"
+    if cmd == "_daemon":
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        daemon()
+    elif cmd == "list":
+        print(cmd_list(int(a[1]) if len(a) > 1 and a[1].isdigit() else 15))
+    elif cmd == "on":
+        print(start({"goto": a[1] if len(a) > 1 else "last"}))
+    elif cmd == "off":
+        print(start({"off": True}) if running_pid() else "readout: not running")
+    elif cmd == "toggle":
+        print(start({"toggle": True}) if running_pid() else start({"goto": "last"}))
+    elif cmd == "goto":
+        handle_reply(" ".join(a[1:]))
+    elif cmd == "later":
+        cmd_later(a[1:])
+    elif cmd == "stream" and len(a) > 1:
+        s = jload(SETTINGS, {})
+        s["stream"] = a[1].upper()
+        jsave(SETTINGS, s)
+        print("readout speaks on the %s volume (takes effect next start)" % a[1].upper())
+    elif cmd == "status":
+        st = jload(STATUS, {})
+        print("readout: %s%s" % ("running" if running_pid() else "off",
+              ", at #%s sentence %s of %s messages" % (st.get("message"), st.get("sentence"), st.get("of"))
+              if running_pid() and st else ""))
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

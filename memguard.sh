@@ -19,7 +19,7 @@ while true; do
     n=$(pgrep -x claude 2>/dev/null | wc -l)
     termux-notification --id memguard --title "Low memory -- ${avail}MB free" \
       --content "$n claude session(s) running. More than one at a time is what caused the last freeze -- overseer's /sessions can close extras." \
-      2>/dev/null
+      $(python3 "$HOME/bin/notify_lib.py" args plain 2>/dev/null) 2>/dev/null
     echo "$(date '+%F %T') low: ${avail}MB free, $n claude session(s)" >> "$LOG"
     sleep "$COOLDOWN"
   fi

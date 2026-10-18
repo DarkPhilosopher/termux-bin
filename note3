@@ -34,4 +34,6 @@ termux-notification \
     --content "$content" \
     --button1 "$label1" --button1-action "$action1" \
     --button2 "$label2" --button2-action "$action2" \
-    --button3 "$label3" --button3-action "$action3"
+    --button3 "$label3" --button3-action "$action3" \
+    $(case "$action1$action2$action3" in *REPLY*) kind=reply ;; *) kind=plain ;; esac
+      python3 "$HOME/bin/notify_lib.py" args "$kind" 2>/dev/null)

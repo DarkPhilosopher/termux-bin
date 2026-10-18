@@ -24,6 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relay_lib as r  # noqa: E402
+import notify_lib  # noqa: E402 -- shared vibrate setting
 
 NOTIFY_ID = "relay-claude"
 SELF = os.path.abspath(__file__)
@@ -36,8 +37,8 @@ def post():
         "--content", "Reply sends what you type into the claude session",
         "--button1", "Reply",
         "--button1-action", "%s --reply $REPLY" % SELF,
-        "--ongoing",
-    ])
+        "--ongoing", "--alert-once",
+    ] + notify_lib.vibrate_args(reply=True))
 
 
 def stop():

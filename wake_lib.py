@@ -39,6 +39,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import babymenu  # noqa: E402
+import notify_lib  # noqa: E402 -- shared vibrate setting
 
 # overseer has no .py extension, so load it by path -- reuses its
 # claude/RAM/sync/menu helpers instead of copying them.
@@ -240,7 +241,8 @@ def task_notify():
         "--content", content[:1000]]
        + _btn(1, "Reply", "%s %s set $REPLY" % (PY, me))
        + _btn(2, "Same thing", "%s %s same" % (PY, me))
-       + _btn(3, "Pause", "%s %s remind off" % (PY, me)), 20)
+       + _btn(3, "Pause", "%s %s remind off" % (PY, me))
+       + notify_lib.vibrate_args(reply=True), 20)
 
 
 def mental_notify(loud=False):
@@ -258,14 +260,17 @@ def mental_notify(loud=False):
     cmd += _btn(1, "Reply", "%s %s set $REPLY" % (PY, me))
     cmd += _btn(2, "Not great", "%s %s log not great" % (PY, me))
     cmd += _btn(3, "Need help", "%s %s help" % (PY, me))
-    if loud:
+    if loud:  # always vibrates, whatever `vibrate` is set to
         cmd += ["--priority", "max", "--sound", "--vibrate", "600,300,600,300,600"]
+    else:
+        cmd += notify_lib.vibrate_args(reply=True)
     sh(cmd, 20)
 
 
 def help_notify():
     sh(["termux-notification", "--id", "wake-help", "--title", "help",
-        "--content", "\n".join(HELP_LINES), "--priority", "max"], 20)
+        "--content", "\n".join(HELP_LINES), "--priority", "max"]
+       + notify_lib.vibrate_args(), 20)
 
 
 def tick():

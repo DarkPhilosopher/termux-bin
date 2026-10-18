@@ -26,6 +26,8 @@ declare -A CATALOG=(
   [wake]="wake -- looks after you first: mental check, task reminder, diagnostics in one place"
   [mental-check]="mental-check -- how you're feeling: check in, history, hourly reminder, help numbers"
   [task-reminder]="task-reminder -- what you're doing now / were doing, reminder every 20 min"
+  [readout]="readout -- reads this Claude conversation out loud from its saved file (no tokens): play/pause, jump to a message, start later, off"
+  [vibrate]="vibrate -- one vibrate setting for every Termux notification: all, reply-button ones only, or off"
   [diagnostics]="diagnostics -- everything this phone reports about itself, locally and online"
   [overseer]="overseer -- one dashboard with /help/list/open/newsession, or \`overseer notify\` for a pinned reply notification"
   [programs]="programs -- lists every one of your own commands and starts one -- /help inside it"
@@ -44,6 +46,8 @@ declare -A LAUNCH=(
   [mental-check]='exec python3 "$HOME/bin/mental-check" "$@"'
   [task-reminder]='exec python3 "$HOME/bin/task-reminder" "$@"'
   [diagnostics]='exec python3 "$HOME/bin/diagnostics" "$@"'
+  [readout]='exec python3 "$HOME/bin/readout" "$@"'
+  [vibrate]='exec python3 "$HOME/bin/notify_lib.py" "$@"'
   [overseer]='exec python3 "$HOME/bin/overseer" "$@"'
   [programs]='exec python3 "$HOME/bin/programs" "$@"'
   [termux-panel]='exec python3 "$HOME/bin/termux-panel" "$@"'
@@ -56,7 +60,9 @@ declare -A LAUNCH=(
 )
 
 # commands that reuse another command's script (default: same name)
-declare -A SOURCE=()
+declare -A SOURCE=(
+  [vibrate]=notify_lib.py
+)
 
 made=0
 for name in "${!LAUNCH[@]}"; do
