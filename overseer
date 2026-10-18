@@ -346,7 +346,7 @@ def _in_ubuntu(*cmd):
 
 def _menu_wakeup():
     options = [
-        ("Continue Claude (new session)", "claude"),
+        ("Continue Claude", "claude"),
         ("Sync Claude chats now", "sync"),
         ("Check for updates", "updates"),
     ]
@@ -359,7 +359,11 @@ def _menu_wakeup():
             if _live_claude_pids():
                 print("claude is already running -- one at a time (menu 2 to close extras)")
             else:
-                for line in cmd_newsession("proot-distro login ubuntu -- cl"):
+                # Runs right here in this tab: the Play-store Termux has no
+                # RUN_COMMAND service, so opening a new tab fails ("Not found;
+                # no service started"). Back to this menu when claude exits.
+                print("starting claude (continues your last chat, syncs when you exit)...")
+                for line in _in_ubuntu("/usr/local/bin/cl"):
                     print(line)
         elif action == "sync":
             for line in _in_ubuntu("csync", "push"):
