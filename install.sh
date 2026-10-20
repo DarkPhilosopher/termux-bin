@@ -38,6 +38,7 @@ declare -A CATALOG=(
   [feed]="feed -- a chronological read-only log of everything already tracked here: git, RAM warnings, weather, voice, sync, file moves"
   [relay-file]="relay-file -- pinned notification: Reply saves what you type to a file"
   [relay-claude]="relay-claude -- pinned notification: Reply sends what you type into the claude session"
+  [vframes]="vframes -- still images from a video every 0.01s/1.5s/1m/1h, 720p, into its own Downloads folder (runs in Ubuntu)"
 )
 declare -A LAUNCH=(
   [note3]='exec "$HOME/bin/note3" "$@"'
@@ -57,6 +58,7 @@ declare -A LAUNCH=(
   [feed]='exec python3 "$HOME/bin/feed" "$@"'
   [relay-file]='exec python3 "$HOME/bin/relay-file" "$@"'
   [relay-claude]='exec python3 "$HOME/bin/relay-claude" "$@"'
+  [vframes]='exec "$HOME/bin/vframes" "$@"'
 )
 
 # commands that reuse another command's script (default: same name)

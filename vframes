@@ -1,0 +1,25 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# vframes -- save still images from a video, one every N seconds/minutes/hours.
+# The real script is ~/.claude/bin/vframes.py inside the Ubuntu container
+# (synced by claude-sync); ffmpeg lives there too, so this just hands the
+# job over. `vframes -h` for options. Examples:
+#     vframes                 newest video in Downloads, every 1.5 s, 720p, first half
+#     vframes -e 0.01s        every 0.01 s    vframes -e 1m / -e 1h   every minute / hour
+#     vframes -p all -s 1080  whole video, 1080p
+# First run installs ffmpeg in Ubuntu if it's missing (one time).
+args=()
+for a in "$@"; do
+  if [ -e "$a" ]; then                      # a file path: make it visible inside Ubuntu
+    a=$(realpath "$a")
+    a=${a/#\/storage\/emulated\/0//sdcard}
+    case "$a" in /sdcard/*) ;; *) echo "vframes: put the video in phone storage (e.g. Downloads) -- Ubuntu can't see $a" >&2; exit 1;; esac
+  fi
+  args+=("$a")
+done
+exec proot-distro login ubuntu --bind /storage/emulated/0:/sdcard -- sh -c '
+  if ! command -v ffmpeg >/dev/null; then
+    echo "vframes: installing ffmpeg in Ubuntu (one time, a few minutes)..."
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq &&
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null || exit 1
+  fi
+  exec python3 /root/.claude/bin/vframes.py "$@"' vframes "${args[@]}"
