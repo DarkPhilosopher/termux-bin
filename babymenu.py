@@ -17,7 +17,20 @@ an exit option."
 Deliberately just the rendering/keymap logic, no I/O of its own -- each
 program still does its own input()/print() loop, this only decides
 what a screen looks like and what each digit means.
+
+Every option line is fit to the REAL terminal width (shutil.get_terminal_size(),
+not a guessed constant) -- requested directly: "make sure things
+display within screensize or at least option select display full
+item." A long label (e.g. "Live feed (git, RAM, sync, more)") on a
+narrow phone terminal would otherwise wrap onto a second physical row
+-- the exact bug that once corrupted Spark's own arrow-key menu's
+redraw math (builder._render_menu, see spark.md), just without that
+menu's own cursor-repositioning to go wrong here. `a` (format_all())
+is deliberately the one place that stays UNTRUNCATED -- "show full
+item" lives there on purpose, not duplicated as a second mechanism.
 """
+
+import shutil
 
 BACK = "BACK"   # slot 7 chosen, and a parent menu exists
 EXIT = "EXIT"   # slot 7 chosen, and this is the top level
@@ -26,6 +39,22 @@ ALL_KEY = "a"   # typed (not a digit slot -- doesn't compete with 1-8), means "s
 
 _NO_OVERFLOW_SLOTS = [1, 2, 3, 4, 5, 6, 8]   # used when everything fits on one page
 _PAGE_SIZE = 6                                # real options per page once paginated
+_MIN_WIDTH = 20                               # never truncate below this even on a tiny/fake terminal
+
+
+def _width():
+    return max(shutil.get_terminal_size((80, 24)).columns, _MIN_WIDTH)
+
+
+def _fit(text, width):
+    """Truncates to fit `width` columns, marking that it was cut (so
+    "it just stops" never looks like the whole label) rather than
+    silently dropping the tail."""
+    if len(text) <= width:
+        return text
+    if width <= 1:
+        return text[:width]
+    return text[:width - 1] + "…"   # ellipsis -- one column, unlike "..."
 
 
 def render(title, options, page=0, has_parent=True):
@@ -62,11 +91,13 @@ def render(title, options, page=0, has_parent=True):
         rows[8] = "more..."
         keymap["8"] = MORE
 
+    width = _width()
+    lines[0] = _fit(lines[0], width)   # the title line, passed in already-built
     for slot in sorted(rows):
-        lines.append("%d. %s" % (slot, rows[slot]))
+        lines.append(_fit("%d. %s" % (slot, rows[slot]), width))
 
     if total > len(chunk):
-        lines.append("(%s to see all %d at once)" % (ALL_KEY, total))
+        lines.append(_fit("(%s to see all %d at once)" % (ALL_KEY, total), width))
 
     return lines, keymap
 
