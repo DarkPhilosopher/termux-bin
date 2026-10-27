@@ -491,15 +491,15 @@ def doing_summary():
     lines.append("what you logged:")
     lines += ["  %-14s %s" % (ago(t), text) for t, text in reversed(rows)] or ["  nothing yet -- task-reminder, 1"]
     lines.append("you asked Claude:")
-    lines += ["  %-14s %s" % (ago(t), text[:70]) for t, text in reversed(last_prompts())] or ["  nothing found"]
+    lines += ["  %-14s %s" % (ago(t), text) for t, text in reversed(last_prompts())] or ["  nothing found"]
     lines.append("last saved work (git):")
-    lines += ["  %-14s %s: %s" % (ago(t), repo, msg[:50]) for t, repo, msg in last_commits()] or ["  nothing found"]
+    lines += ["  %-14s %s: %s" % (ago(t), repo, msg) for t, repo, msg in last_commits()] or ["  nothing found"]
     lines.append("newest files:")
     lines += ["  %-14s %s" % (ago(t), p.replace("/storage/emulated/0/", "")) for t, p in newest_files()] or ["  nothing found"]
     # one-line "so you were probably..." from the freshest signal
     signals = [(t, "you said: " + x) for t, x in rows[-1:]]
-    signals += [(t, "asking Claude: " + x[:60]) for t, x in last_prompts(1)]
-    signals += [(t, "working on %s (%s)" % (r, m[:40])) for t, r, m in last_commits(1)]
+    signals += [(t, "asking Claude: " + x) for t, x in last_prompts(1)]
+    signals += [(t, "working on %s (%s)" % (r, m)) for t, r, m in last_commits(1)]
     if signals:
         t, what = max(signals)
         lines += ["", "most recently (%s): %s" % (ago(t), what)]
