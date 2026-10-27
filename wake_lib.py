@@ -29,10 +29,14 @@ import json
 import os
 import re
 import select
+import shutil
 import socket
 import subprocess
 import sys
+import termios
+import textwrap
 import time
+import tty
 import urllib.error
 import urllib.request
 
@@ -296,14 +300,17 @@ def tick():
 
 def mental_quick():
     last = last_entry(MENTAL_LOG)
-    feel = "last %s: %s" % (ago(last[0]), last[1][:40]) if last else "no check-ins yet"
-    return "mental    %s | reminders %s" % (feel, "hourly" if is_on("mental-remind") else "off")
+    # full text, never cut off (Gabe: "reminders content should not cut off at all")
+    when = "last %s" % ago(last[0]) if last else "no check-ins yet"
+    line = "mental    %s | reminders %s" % (when, "hourly" if is_on("mental-remind") else "off")
+    return line + ("\n          " + last[1] if last else "")
 
 
 def task_quick():
     last = last_entry(TASK_LOG)
-    doing = "%s (%s)" % (last[1][:40], ago(last[0])) if last else "nothing logged yet"
-    return "task      %s | reminders %s" % (doing, "every %d min" % TICK_MIN if is_on("task-remind") else "off")
+    when = "noted %s" % ago(last[0]) if last else "nothing logged yet"
+    line = "task      %s | reminders %s" % (when, "every %d min" % TICK_MIN if is_on("task-remind") else "off")
+    return line + ("\n          " + last[1] if last else "")
 
 
 def diag_quick():
@@ -328,24 +335,87 @@ def all_quick():
     return [p.result() for p in parts]
 
 
+def fit(lines):
+    """Wrap every line to the screen width with a hanging indent, so long
+    reminders wrap under their text instead of under the label. Nothing is
+    ever cut off -- it just takes more lines (scrolling is fine)."""
+    width = max(30, shutil.get_terminal_size((80, 24)).columns - 1)
+    out = []
+    for block in lines:
+        for line in block.split("\n"):
+            body = line.lstrip(" ")
+            lead = line[:len(line) - len(body)]
+            if len(lead) < 10 and len(line) > 10 and line[:10].rstrip() and line[9] == " ":
+                lead = " " * 10          # "mental    ..." -> wrap under the text column
+                first, body = line[:10], line[10:].lstrip(" ")
+            else:
+                first = lead
+            out += textwrap.wrap(body, width, initial_indent=first, subsequent_indent=lead,
+                                 break_on_hyphens=False) or [line]
+    return out
+
+
+STARTUP_OPTIONS = [
+    ("mental check", ["mental-check"]),
+    ("task reminder", ["task-reminder"]),
+    ("diagnostics", ["diagnostics"]),
+    ("wake menu", ["wake"]),
+    ("Claude (continue)", None),
+    ("feed", ["feed"]),
+    ("readout", ["readout"]),
+    ("programs", ["programs"]),
+]
+
+
+def _read_key(timeout):
+    """One key press, no Enter needed ("swallow key"). None on timeout."""
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+    except termios.error:
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        return sys.stdin.readline().strip()[:1] if ready else None
+    try:
+        tty.setcbreak(fd, termios.TCSANOW)   # not TCSAFLUSH: keep a key pressed early (spark2 bug)
+        ready, _, _ = select.select([fd], [], [], timeout)
+        return os.read(fd, 1).decode(errors="replace") if ready else None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _start_claude():
+    if overseer._live_claude_pids():
+        sys.stdout.write("A Claude is already running -- start another anyway? [y/N] ")
+        sys.stdout.flush()
+        if (_read_key(30) or "n").lower() != "y":
+            print("\ncancelled -- nothing started")
+            return
+        print()
+    subprocess.run(["proot-distro", "login", "ubuntu", "--bind",
+                    "/storage/emulated/0:/sdcard", "--", "cl"])
+
+
 def startup():
-    """Shown automatically when a Termux session opens (~/.bashrc). Never
-    blocks for long: 15 s to pick one, otherwise it gets out of the way."""
-    print("\n".join(["wake -- " + time.strftime("%a %d %b  %H:%M")] + all_quick()))
-    print("open: 1 mental check  2 task reminder  3 diagnostics  4 wake  (enter = skip)")
+    """Shown automatically when a Termux session opens (~/.bashrc). Every
+    line in full (wrapped, never cut off), then one key 1-8 picks an option
+    -- no Enter. 15 s, or any other key, and it gets out of the way."""
+    print("\n".join(fit(["wake -- " + time.strftime("%a %d %b  %H:%M")] + all_quick())))
+    print("\n".join(fit(["press 1-8 (no enter), anything else skips:"] +
+                         ["  %d %s" % (i, label) for i, (label, _) in enumerate(STARTUP_OPTIONS, 1)])))
     sys.stdout.write("> ")
     sys.stdout.flush()
     try:
-        ready, _, _ = select.select([sys.stdin], [], [], 15)
+        key = _read_key(15)
     except (OSError, ValueError):
         return
-    if not ready:
-        print()
+    print(key or "")
+    if not key or key not in "12345678":
         return
-    choice = sys.stdin.readline().strip()
-    prog = {"1": "mental-check", "2": "task-reminder", "3": "diagnostics", "4": "wake"}.get(choice)
-    if prog:
-        subprocess.run([PY, os.path.join(HERE, prog)])
+    label, prog = STARTUP_OPTIONS[int(key) - 1]
+    if prog is None:
+        _start_claude()
+    else:
+        subprocess.run([PY, os.path.join(HERE, prog[0])] + prog[1:])
 
 
 # ---------------------------------------------------------------- task summary
