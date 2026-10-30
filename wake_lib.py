@@ -365,15 +365,52 @@ def fit(lines):
     return out
 
 
+def _carry_on():
+    pager(doing_summary())
+
+
+def _update_doing():
+    print("What are you doing now?")
+    try:
+        text = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if text:
+        print("saved: " + append_log(TASK_LOG, text))
+
+
+def _full_recall():
+    """Local, no AI: the shared unfinished list + the memory index, in full."""
+    lines = ["Full recall (local files, no AI)", ""]
+    for title, path in (("unfinished.md", ROOTFS + "/root/.claude/unfinished.md"),
+                        ("memory index", ROOTFS + "/root/.claude/projects/-root/memory/MEMORY.md")):
+        lines.append("== %s ==" % title)
+        lines += (read(path).rstrip("\n").splitlines() or ["  (not found: %s)" % path]) + [""]
+    pager(fit(lines))
+
+
+def _full_diagnostics():
+    if os.path.exists(overseer.MEMGUARD) and not overseer._running("memguard.sh"):
+        log = open(os.path.join(TERMUX_HOME, ".memguard.log"), "a")
+        subprocess.Popen([overseer.MEMGUARD], stdout=log, stderr=log,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+        print("memguard was OFF -- started it")
+    print("reading the phone...")
+    pager(fit(device_report()))
+
+
+# The same 8-row menu Claude shows on every open (bin/session-start.py in
+# claude-sync), but every option is plain local Python -- no AI. Always
+# exactly 8 rows; unused ones are empty "-" placeholders.
 STARTUP_OPTIONS = [
-    ("mental check", ["mental-check"]),
-    ("task reminder", ["task-reminder"]),
-    ("diagnostics", ["diagnostics"]),
-    ("wake menu", ["wake"]),
-    ("Claude (continue)", None),
-    ("feed", ["feed"]),
-    ("readout", ["readout"]),
-    ("programs", ["programs"]),
+    ("Carry on (what you were doing)", _carry_on),
+    ("Mental check-in", lambda: subprocess.run([PY, os.path.join(HERE, "mental-check")])),
+    ("Update what you're doing", _update_doing),
+    ("Full recall", _full_recall),
+    ("Full diagnostics (+ memguard on)", _full_diagnostics),
+    ("-", None),
+    ("-", None),
+    ("-", None),
 ]
 
 
@@ -421,11 +458,9 @@ def startup():
     print(key or "")
     if not key or key not in "12345678":
         return
-    label, prog = STARTUP_OPTIONS[int(key) - 1]
-    if prog is None:
-        _start_claude()
-    else:
-        subprocess.run([PY, os.path.join(HERE, prog[0])] + prog[1:])
+    label, action = STARTUP_OPTIONS[int(key) - 1]
+    if action:
+        action()
 
 
 # ---------------------------------------------------------------- task summary
