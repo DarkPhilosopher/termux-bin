@@ -127,7 +127,7 @@ function home(){
     ["Edit routine", n+" items", editRoutine],
     ["Save JSON", db.saved ? "saved "+esc(rel(db.saved)) : "", exportJson],
     ["Load JSON", "from a file", importJson],
-    ["-", "", null]
+    ["Notifications", ("Notification" in window) ? "Chrome: "+Notification.permission : "Chrome: not offered here", notifySetup]
   ];
   show("Mind & Routine", '<div class="grid8">'+boxes.map((b,i)=>
     '<div class="box'+(b[2]?"":" empty")+(b[3]?" "+b[3]:"")+'" data-i="'+i+'"><b>'+(i+1)+'</b><span>'+esc(b[0])+'</span><small>'+b[1]+'</small></div>').join("")+'</div>', false);
@@ -199,13 +199,84 @@ function editRoutine(){
 }
 
 // ---------- history ----------
+function feelLabel(k){ return FEELS.find(f=>f.k===k)?.label || k; }
 function history(){
   const ms=db.mental.slice().reverse().slice(0,60);
   const days=Object.keys(db.routine.days).sort().reverse().slice(0,14);
-  const n=db.routine.items.length;
-  show("History", '<div class="card"><h2>Check-ins</h2>'+(ms.map(e=>'<div class="item"><label><b>'+esc(FEELS.find(f=>f.k===e.feel)?.label||e.feel)+'</b>'+(e.sleep?' · slept '+esc(e.sleep):'')+
-      (e.note?'<br>'+esc(e.note):'')+'<br><span class="stamp">'+esc(when(e.t))+'</span></label></div>').join("")||"<p>none yet</p>")+
+  show("History", '<div class="card"><h2>Check-ins <span class="stamp">(tap one to edit)</span></h2>'+(ms.map(e=>'<div class="item" data-t="'+e.t+'" style="cursor:pointer"><label><b>'+esc(feelLabel(e.feel))+'</b>'+(e.sleep?' · slept '+esc(e.sleep):'')+
+      (e.note?'<br>'+esc(e.note):'')+'<br><span class="stamp">'+esc(when(e.t))+(e.edits&&e.edits.length?' · edited '+esc(stamp(e.edits[e.edits.length-1].t)):'')+'</span></label><span>edit ›</span></div>').join("")||"<p>none yet</p>")+
     '</div><div class="card"><h2>Routine by day</h2>'+(days.map(d=>{ const c=Object.keys(db.routine.days[d]).length; return '<div class="item"><label>'+d+'</label><span>'+c+' done</span></div>'; }).join("")||"<p>none yet</p>")+'</div>');
+  document.querySelectorAll("[data-t]").forEach(el=>el.onclick=()=>editEntry(+el.dataset.t));
+}
+
+// Edit a past check-in. Gabe's rule (merge-provenance): never silently
+// replace -- every earlier version stays in e.edits with when it changed.
+function editEntry(t){
+  const e=db.mental.find(x=>x.t===t); if(!e){ history(); return; }
+  let pick=e.feel;
+  const prev=(e.edits||[]).slice().reverse();
+  show("Edit check-in", '<div class="card"><h2>Check-in from '+esc(stamp(e.t))+'</h2><div class="row">'+
+    FEELS.map(f=>'<button class="btn feel'+(f.k==="help"?" bad":"")+(f.k===pick?" on":"")+'" data-k="'+f.k+'">'+f.label+'</button>').join("")+
+    '</div></div><div class="card"><h2>Note</h2><textarea id="note">'+esc(e.note||"")+'</textarea>'+
+    '<h3>Slept</h3><select id="sleep">'+["","under 4 h","4-6 h","6-8 h","over 8 h"].map(o=>'<option value="'+o+'"'+((e.sleep||"")===o?" selected":"")+'>'+(o||"-")+'</option>').join("")+'</select></div>'+
+    '<div class="row"><button class="btn pri" id="saveEd" style="flex:2">Save changes</button><button class="btn bad" id="delEd" style="flex:1">Delete</button></div>'+
+    (prev.length?'<div class="card" style="margin-top:12px"><h2>Earlier versions (kept)</h2>'+prev.map(v=>'<div class="item"><label><b>'+esc(feelLabel(v.before.feel))+'</b>'+(v.before.sleep?' · slept '+esc(v.before.sleep):'')+(v.before.note?'<br>'+esc(v.before.note):'')+
+      '<br><span class="stamp">replaced '+esc(stamp(v.t))+'</span></label></div>').join("")+'</div>':''));
+  document.querySelectorAll(".feel").forEach(b=>b.onclick=()=>{ pick=b.dataset.k; document.querySelectorAll(".feel").forEach(x=>x.classList.toggle("on",x===b)); });
+  $("#saveEd").onclick=()=>{
+    const after={feel:pick, note:$("#note").value.trim(), sleep:$("#sleep").value};
+    if(after.feel===e.feel && after.note===(e.note||"") && after.sleep===(e.sleep||"")){ history(); return; }
+    (e.edits=e.edits||[]).push({t:Date.now(), before:{feel:e.feel, note:e.note||"", sleep:e.sleep||""}});
+    const f=FEELS.find(x=>x.k===after.feel);
+    Object.assign(e, after, {score: f ? f.score : e.score});
+    save(); toast("Saved -- earlier version kept"); history();
+  };
+  $("#delEd").onclick=()=>{
+    if(!confirm("Delete this check-in from "+stamp(e.t)+"?\n(It also won't come back from Termux.)")) return;
+    db.mental=db.mental.filter(x=>x!==e);
+    (db.deleted=db.deleted||[]).push({t:e.t, at:Date.now(), entry:e});   // kept aside, labeled, never just gone
+    save(); toast("Deleted"); history();
+  };
+}
+
+// ---------- Chrome notifications (box 8) ----------
+// Asked for: "a button to ask for that page explicit chrome push notify".
+// Honest limits, shown on screen: Android Chrome only shows web-page
+// notifications through a service worker, which needs an https page --
+// a page opened from a file (file:// or content://) can't register one.
+function notifySetup(){
+  const has = "Notification" in window, sw = "serviceWorker" in navigator, sec = !!window.isSecureContext;
+  const lines = [
+    ["This page's address", location.protocol + "//"],
+    ["Secure (https) page", sec ? "yes" : "no"],
+    ["Notification support", has ? "yes" : "no"],
+    ["Permission", has ? Notification.permission : "-"],
+    ["Service worker (needed on Android)", sw && sec ? "possible" : "not possible here"]
+  ];
+  show("Notifications", '<div class="card"><h2>Chrome notifications</h2>'+
+    lines.map(l=>'<div class="item"><label>'+esc(l[0])+'</label><span>'+esc(l[1])+'</span></div>').join("")+
+    '</div><div class="row"><button class="btn pri" id="askN" style="flex:1">Ask Chrome for permission</button><button class="btn" id="testN" style="flex:1">Send a test</button></div>'+
+    '<div class="card" style="margin-top:12px" id="nres"><p class="stamp">Press "Ask" first. The result shows here.</p></div>'+
+    '<div class="card"><h2>Reminders that always work</h2><p>Termux already sends real phone notifications: <code>track remind on</code> '+
+    '(mood / productivity / goals) and the mental check / task reminders in <code>wake</code>.</p></div>');
+  const res = t => { $("#nres").innerHTML = '<p>'+t+'</p><p class="stamp">'+esc(stamp())+'</p>'; };
+  $("#askN").onclick = () => {
+    if (!has) { res("Chrome doesn't offer notifications to this page (opened from a file). They need the page hosted on an https address."); return; }
+    try {
+      const p = Notification.requestPermission(r => res("Chrome answered: <b>"+esc(r)+"</b>"));
+      if (p && p.then) p.then(r => { res("Chrome answered: <b>"+esc(r)+"</b>"); home(); notifySetup(); });
+    } catch(e) { res("Chrome refused the request: "+esc(e.message)); }
+  };
+  $("#testN").onclick = async () => {
+    if (!has || Notification.permission !== "granted") { res("No permission yet ("+(has?esc(Notification.permission):"not offered")+")."); return; }
+    try {
+      if (sw && sec) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) { await reg.showNotification("Mind & Routine", {body:"Test at "+stamp()}); res("Sent through the service worker."); return; }
+      }
+      new Notification("Mind & Routine", {body:"Test at "+stamp()}); res("Sent.");
+    } catch(e) { res("Chrome blocked it: "+esc(e.message)+" -- on Android this needs the page on https with a service worker."); }
+  };
 }
 
 // ---------- JSON in / out ----------
@@ -222,7 +293,7 @@ function importJson(){
     let d; try{ d=JSON.parse(t); }catch(e){ toast("Not a valid JSON file"); return; }
     if(!d || !Array.isArray(d.mental)){ toast("Not a Mind & Routine file"); return; }
     // merge, never overwrite: keep every check-in from both, routine days combined
-    const seen=new Set(db.mental.map(e=>e.t)); let added=0;
+    const seen=new Set(db.mental.map(e=>e.t).concat((db.deleted||[]).map(x=>x.t))); let added=0;
     d.mental.forEach(e=>{ if(!seen.has(e.t)){ db.mental.push(e); added++; } }); db.mental.sort((a,b)=>a.t-b.t);
     Object.entries((d.routine||{}).days||{}).forEach(([k,v])=>{ db.routine.days[k]=Object.assign({},v,db.routine.days[k]||{}); });
     save(); toast("Merged: "+added+" new check-ins"); home(); }); };
@@ -234,7 +305,7 @@ function importJson(){
 // installs the page; merged here once, matched by exact ms time, never doubled.
 try {
   const seed = JSON.parse(document.getElementById("seed").textContent || "[]");
-  const seen = new Set(db.mental.map(e => e.t)); let added = 0;
+  const seen = new Set(db.mental.map(e => e.t).concat((db.deleted||[]).map(d => d.t))); let added = 0;
   seed.forEach(e => { if (!seen.has(e.t)) { db.mental.push(e); added++; } });
   if (added) { db.mental.sort((a,b) => a.t - b.t); save(); setTimeout(() => toast("Loaded "+added+" check-in(s) from Termux"), 300); }
 } catch(e) {}
