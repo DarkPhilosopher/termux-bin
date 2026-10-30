@@ -300,7 +300,9 @@ def _sync_status():
             return out.stdout.strip()
         except (OSError, subprocess.TimeoutExpired):
             return ""
-    last = g("log", "-1", "--format=%cr") or "?"
+    ct = g("log", "-1", "--format=%ct")
+    # full timestamp (git keeps whole seconds, so always .000) + how long ago
+    last = (time.strftime("%Y-%m-%d %H:%M:%S.000", time.localtime(int(ct))) + " (" + (g("log", "-1", "--format=%cr") or "?") + ")") if ct.isdigit() else "?"
     ahead = g("rev-list", "--count", "@{u}..HEAD")
     dirty = g("status", "--porcelain")
     pending = (ahead not in ("", "0")) or bool(dirty)
@@ -328,7 +330,7 @@ def wakeup_lines():
     except OSError:
         voice = "not set up"
     return [
-        time.strftime("%a %d %b  %H:%M"),
+        time.strftime("%Y-%m-%d %H:%M:%S") + ".%03d" % (time.time() % 1 * 1000),
         "claude    " + claude,
         "memory    " + mem,
         "memguard  " + ("watching" if _running("memguard.sh") else "not running"),

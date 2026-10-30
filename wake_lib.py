@@ -29,10 +29,14 @@ import json
 import os
 import re
 import select
+import shutil
 import socket
 import subprocess
 import sys
+import termios
+import textwrap
 import time
+import tty
 import urllib.error
 import urllib.request
 
@@ -97,7 +101,21 @@ def read(path):
         return ""
 
 
+def stamp(epoch=None):
+    """Full timestamp to the millisecond: 2026-10-30 15:42:07.123.
+    Gabe: "show full time stamp even milliseconds for all things"."""
+    epoch = time.time() if epoch is None else epoch
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch)) + ".%03d" % int(round(epoch % 1 * 1000) % 1000)
+
+
 def ago(epoch):
+    """Full timestamp first, then how long ago, e.g.
+    "2026-10-21 14:13:05.000 (9 days ago)". Entries saved before
+    2026-10-30 only kept whole seconds, so they show .000."""
+    return "%s (%s)" % (stamp(epoch), _rel(epoch))
+
+
+def _rel(epoch):
     mins = int((time.time() - epoch) // 60)
     if mins < 1:
         return "just now"
@@ -165,7 +183,7 @@ def append_log(path, text):
     text = clean_text(text) or "ok"
     os.makedirs(STATE, exist_ok=True)
     with open(path, "a") as f:
-        f.write("%d\t%s\n" % (time.time(), text))
+        f.write("%.3f\t%s\n" % (time.time(), text))
     return text
 
 
@@ -199,7 +217,7 @@ def set_on(name, on):
 
 def _sync_job():
     """One Android job serves both reminders: on while either is on."""
-    if is_on("task-remind") or is_on("mental-remind"):
+    if is_on("task-remind") or is_on("mental-remind") or is_on("track-remind"):
         sh(["termux-job-scheduler", "--job-id", JOB_ID,
             "--period-ms", str(TICK_MIN * 60 * 1000), "--persisted", "true",
             "--script", os.path.join(HERE, "wake-tick")], 20)
@@ -290,20 +308,26 @@ def tick():
         due = not last or time.time() - last[0] > (MENTAL_EVERY_MIN - 2) * 60
         if loud or due:
             mental_notify(loud=loud)
+    if is_on("track-remind"):   # mood / productivity / goals (~/bin/track)
+        subprocess.run([PY, os.path.join(HERE, "track"), "tick"], stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=60)
 
 
 # ---------------------------------------------------------------- quick summaries
 
 def mental_quick():
     last = last_entry(MENTAL_LOG)
-    feel = "last %s: %s" % (ago(last[0]), last[1][:40]) if last else "no check-ins yet"
-    return "mental    %s | reminders %s" % (feel, "hourly" if is_on("mental-remind") else "off")
+    # full text, never cut off (Gabe: "reminders content should not cut off at all")
+    when = "last %s" % ago(last[0]) if last else "no check-ins yet"
+    line = "mental    %s | reminders %s" % (when, "hourly" if is_on("mental-remind") else "off")
+    return line + ("\n          " + last[1] if last else "")
 
 
 def task_quick():
     last = last_entry(TASK_LOG)
-    doing = "%s (%s)" % (last[1][:40], ago(last[0])) if last else "nothing logged yet"
-    return "task      %s | reminders %s" % (doing, "every %d min" % TICK_MIN if is_on("task-remind") else "off")
+    when = "noted %s" % ago(last[0]) if last else "nothing logged yet"
+    line = "task      %s | reminders %s" % (when, "every %d min" % TICK_MIN if is_on("task-remind") else "off")
+    return line + ("\n          " + last[1] if last else "")
 
 
 def diag_quick():
@@ -338,24 +362,122 @@ def all_quick():
     return [p.result() for p in parts]
 
 
+def fit(lines):
+    """Wrap every line to the screen width with a hanging indent, so long
+    reminders wrap under their text instead of under the label. Nothing is
+    ever cut off -- it just takes more lines (scrolling is fine)."""
+    width = max(30, shutil.get_terminal_size((80, 24)).columns - 1)
+    out = []
+    for block in lines:
+        for line in block.split("\n"):
+            body = line.lstrip(" ")
+            lead = line[:len(line) - len(body)]
+            if len(lead) < 10 and len(line) > 10 and line[:10].rstrip() and line[9] == " ":
+                lead = " " * 10          # "mental    ..." -> wrap under the text column
+                first, body = line[:10], line[10:].lstrip(" ")
+            else:
+                first = lead
+            out += textwrap.wrap(body, width, initial_indent=first, subsequent_indent=lead,
+                                 break_on_hyphens=False) or [line]
+    return out
+
+
+def _carry_on():
+    pager(doing_summary())
+
+
+def _update_doing():
+    print("What are you doing now?")
+    try:
+        text = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if text:
+        print("saved: " + append_log(TASK_LOG, text))
+
+
+def _full_recall():
+    """Local, no AI: the shared unfinished list + the memory index, in full."""
+    lines = ["Full recall (local files, no AI)", ""]
+    for title, path in (("unfinished.md", ROOTFS + "/root/.claude/unfinished.md"),
+                        ("memory index", ROOTFS + "/root/.claude/projects/-root/memory/MEMORY.md")):
+        lines.append("== %s ==" % title)
+        lines += (read(path).rstrip("\n").splitlines() or ["  (not found: %s)" % path]) + [""]
+    pager(fit(lines))
+
+
+def _full_diagnostics():
+    if os.path.exists(overseer.MEMGUARD) and not overseer._running("memguard.sh"):
+        log = open(os.path.join(TERMUX_HOME, ".memguard.log"), "a")
+        subprocess.Popen([overseer.MEMGUARD], stdout=log, stderr=log,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+        print("memguard was OFF -- started it")
+    print("reading the phone...")
+    pager(fit(device_report()))
+
+
+# The same 8-row menu Claude shows on every open (bin/session-start.py in
+# claude-sync), but every option is plain local Python -- no AI. Always
+# exactly 8 rows; unused ones are empty "-" placeholders.
+STARTUP_OPTIONS = [
+    ("Carry on (what you were doing)", _carry_on),
+    ("Mental check-in", lambda: subprocess.run([PY, os.path.join(HERE, "mental-check")])),
+    ("Update what you're doing", _update_doing),
+    ("Full recall", _full_recall),
+    ("Full diagnostics (+ memguard on)", _full_diagnostics),
+    ("-", None),
+    ("-", None),
+    ("-", None),
+]
+
+
+def _read_key(timeout):
+    """One key press, no Enter needed ("swallow key"). None on timeout."""
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+    except termios.error:
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        return sys.stdin.readline().strip()[:1] if ready else None
+    try:
+        tty.setcbreak(fd, termios.TCSANOW)   # not TCSAFLUSH: keep a key pressed early (spark2 bug)
+        ready, _, _ = select.select([fd], [], [], timeout)
+        return os.read(fd, 1).decode(errors="replace") if ready else None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _start_claude():
+    if overseer._live_claude_pids():
+        sys.stdout.write("A Claude is already running -- start another anyway? [y/N] ")
+        sys.stdout.flush()
+        if (_read_key(30) or "n").lower() != "y":
+            print("\ncancelled -- nothing started")
+            return
+        print()
+    subprocess.run(["proot-distro", "login", "ubuntu", "--bind",
+                    "/storage/emulated/0:/sdcard", "--", "cl"])
+
+
 def startup():
-    """Shown automatically when a Termux session opens (~/.bashrc). Never
-    blocks for long: 15 s to pick one, otherwise it gets out of the way."""
-    print("\n".join(["wake -- " + time.strftime("%a %d %b  %H:%M")] + all_quick()))
-    print("open: 1 mental check  2 task reminder  3 diagnostics  4 wake  (enter = skip)")
+    """Shown automatically when a Termux session opens (~/.bashrc). Every
+    line in full (wrapped, never cut off), then one key 1-8 picks an option
+    -- no Enter. 15 s, or any other key, and it gets out of the way."""
+    print("\n".join(fit(["wake -- " + stamp()] + all_quick())))
+    print("\n".join(fit(["press 1-8 (no enter), anything else skips:"] +
+                         ["  %d %s" % (i, label) for i, (label, _) in enumerate(STARTUP_OPTIONS, 1)])))
     sys.stdout.write("> ")
     sys.stdout.flush()
     try:
-        ready, _, _ = select.select([sys.stdin], [], [], 15)
+        key = _read_key(15)
     except (OSError, ValueError):
         return
-    if not ready:
-        print()
+    print(key or "")
+    if not key or key not in "12345678":
         return
-    choice = sys.stdin.readline().strip()
-    prog = {"1": "mental-check", "2": "task-reminder", "3": "diagnostics", "4": "wake"}.get(choice)
-    if prog:
-        subprocess.run([PY, os.path.join(HERE, prog)])
+    label, action = STARTUP_OPTIONS[int(key) - 1]
+    if action:
+        action()
 
 
 # ---------------------------------------------------------------- task summary
@@ -421,15 +543,15 @@ def doing_summary():
     lines.append("what you logged:")
     lines += ["  %-14s %s" % (ago(t), text) for t, text in reversed(rows)] or ["  nothing yet -- task-reminder, 1"]
     lines.append("you asked Claude:")
-    lines += ["  %-14s %s" % (ago(t), text[:70]) for t, text in reversed(last_prompts())] or ["  nothing found"]
+    lines += ["  %-14s %s" % (ago(t), text) for t, text in reversed(last_prompts())] or ["  nothing found"]
     lines.append("last saved work (git):")
-    lines += ["  %-14s %s: %s" % (ago(t), repo, msg[:50]) for t, repo, msg in last_commits()] or ["  nothing found"]
+    lines += ["  %-14s %s: %s" % (ago(t), repo, msg) for t, repo, msg in last_commits()] or ["  nothing found"]
     lines.append("newest files:")
     lines += ["  %-14s %s" % (ago(t), p.replace("/storage/emulated/0/", "")) for t, p in newest_files()] or ["  nothing found"]
     # one-line "so you were probably..." from the freshest signal
     signals = [(t, "you said: " + x) for t, x in rows[-1:]]
-    signals += [(t, "asking Claude: " + x[:60]) for t, x in last_prompts(1)]
-    signals += [(t, "working on %s (%s)" % (r, m[:40])) for t, r, m in last_commits(1)]
+    signals += [(t, "asking Claude: " + x) for t, x in last_prompts(1)]
+    signals += [(t, "working on %s (%s)" % (r, m)) for t, r, m in last_commits(1)]
     if signals:
         t, what = max(signals)
         lines += ["", "most recently (%s): %s" % (ago(t), what)]

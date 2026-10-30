@@ -221,7 +221,7 @@ def daemon():
         if wake_at:
             if time.time() < wake_at:
                 notify("readout: sleeping", "starts reading at %s -- Play to start now"
-                       % time.strftime("%H:%M", time.localtime(wake_at)), False, first)
+                       % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(wake_at)) + ".%03d" % (wake_at % 1 * 1000)), False, first)
                 first = False
                 time.sleep(5)
                 continue

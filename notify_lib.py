@@ -107,7 +107,7 @@ def _log(source, button, said, result):
     except OSError:
         context = "-"
     line = "%s | %s | %s | said: %s | context: %s | %s\n" % (
-        time.strftime("%Y-%m-%d %a %H:%M:%S"), source, button,
+        time.strftime("%Y-%m-%d %a %H:%M:%S") + ".%03d" % (time.time() % 1 * 1000), source, button,
         " ".join(said.split()) or "-", context, result)
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     with open(LOG, "a") as f:
