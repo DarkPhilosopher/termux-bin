@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Mind &amp; Routine</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#5b6169">
+<link rel="icon" href="icon-192.png">
 <!--
   Mind & Routine -- mental health check-in + daily routine, offline, in Chrome.
   One file, no internet, no server: works after Termux is closed.
@@ -257,8 +260,13 @@ function notifySetup(){
     lines.map(l=>'<div class="item"><label>'+esc(l[0])+'</label><span>'+esc(l[1])+'</span></div>').join("")+
     '</div><div class="row"><button class="btn pri" id="askN" style="flex:1">Ask Chrome for permission</button><button class="btn" id="testN" style="flex:1">Send a test</button></div>'+
     '<div class="card" style="margin-top:12px" id="nres"><p class="stamp">Press "Ask" first. The result shows here.</p></div>'+
+    '<div class="card"><h2>Check-in reminders</h2><p class="stamp">Status: <span id="remSt">'+esc(remindStatus())+'</span></p><div class="row">'+
+    '<button class="btn" id="remOn" style="flex:1">Turn on</button><button class="btn" id="remOff" style="flex:1">Turn off</button></div>'+
+    '<p class="stamp">While this app is open (or in the background): every 3 h. When it is fully closed, Chrome decides -- at most about twice a day, and only once the app is installed (Add to Home screen) and used regularly.</p></div>'+
     '<div class="card"><h2>Reminders that always work</h2><p>Termux already sends real phone notifications: <code>track remind on</code> '+
     '(mood / productivity / goals) and the mental check / task reminders in <code>wake</code>.</p></div>');
+  $("#remOn").onclick = async () => { const r = await remindersOn(); $("#remSt").textContent = r; };
+  $("#remOff").onclick = async () => { const r = await remindersOff(); $("#remSt").textContent = r; };
   const res = t => { $("#nres").innerHTML = '<p>'+t+'</p><p class="stamp">'+esc(stamp())+'</p>'; };
   $("#askN").onclick = () => {
     if (!has) { res("Chrome doesn't offer notifications to this page (opened from a file). They need the page hosted on an https address."); return; }
@@ -278,6 +286,43 @@ function notifySetup(){
     } catch(e) { res("Chrome blocked it: "+esc(e.message)+" -- on Android this needs the page on https with a service worker."); }
   };
 }
+
+// ---------- reminders (need https + service worker + permission) ----------
+const REMIND_MS = 3 * 3600 * 1000;
+let remindTimer = null;
+function remindStatus(){
+  if (!db.remind) return "off";
+  return "on since " + stamp(db.remind.since) + (db.remind.periodic ? " (also when closed, if Chrome allows)" : " (while open)");
+}
+async function notifyNow(title, body){
+  const reg = ("serviceWorker" in navigator) ? await navigator.serviceWorker.getRegistration() : null;
+  if (reg) return reg.showNotification(title, {body, tag:"mind-checkin", icon:"icon-192.png"});
+  return new Notification(title, {body});
+}
+function startRemindTimer(){
+  clearInterval(remindTimer);
+  if (!db.remind || !("Notification" in window) || Notification.permission !== "granted") return;
+  remindTimer = setInterval(() => {
+    const last = db.mental[db.mental.length-1];
+    if (!last || Date.now() - last.t > REMIND_MS - 60000) notifyNow("Mind & Routine", "Time for a check-in? (" + stamp() + ")").catch(()=>{});
+  }, 10 * 60 * 1000);
+}
+async function remindersOn(){
+  if (!("Notification" in window)) return "can't -- this page has no notification support (open the https version)";
+  if (Notification.permission !== "granted" && (await Notification.requestPermission()) !== "granted") return "can't -- Chrome permission is " + Notification.permission;
+  db.remind = {since: Date.now(), periodic: false};
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    if (reg.periodicSync) { await reg.periodicSync.register("mind-checkin", {minInterval: 12 * 3600 * 1000}); db.remind.periodic = true; }
+  } catch(e) { /* Chrome said no to background checks -- timer still works while open */ }
+  save(); startRemindTimer(); return remindStatus();
+}
+async function remindersOff(){
+  delete db.remind; save(); clearInterval(remindTimer);
+  try { const reg = await navigator.serviceWorker.getRegistration(); if (reg && reg.periodicSync) await reg.periodicSync.unregister("mind-checkin"); } catch(e) {}
+  return "off";
+}
+startRemindTimer();
 
 // ---------- JSON in / out ----------
 function exportJson(){
@@ -310,6 +355,9 @@ try {
   if (added) { db.mental.sort((a,b) => a.t - b.t); save(); setTimeout(() => toast("Loaded "+added+" check-in(s) from Termux"), 300); }
 } catch(e) {}
 
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js").catch(e => console.log("sw:", e));
+}
 home();
 </script>
 </body>
