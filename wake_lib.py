@@ -93,6 +93,16 @@ def prop(name):
     return sh(["getprop", name], 5)
 
 
+# Claude's Ubuntu container has no TZ set, so it runs on UTC -- every time it
+# showed was 6 h off the phone's own clock (found 2026-10-30). Use the phone's
+# timezone wherever this runs, unless TZ was set on purpose.
+if not os.environ.get("TZ"):
+    _tz = prop("persist.sys.timezone")
+    if _tz:
+        os.environ["TZ"] = _tz
+        time.tzset()
+
+
 def read(path):
     try:
         with open(path) as f:

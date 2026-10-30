@@ -9,6 +9,8 @@ with no internet. Plain local Python here, no AI.
                     `wake` / the Termux startup screen show them too.
                     Never duplicates: each check-in is matched by its exact
                     millisecond timestamp.
+    mind load       refresh Downloads/mind.html with your Termux check-ins
+                    (done automatically by plain `mind` too)
     mind where      print where the page and its JSON saves live
 
 In Chrome you can also type the address directly:
@@ -31,11 +33,31 @@ DL = "/storage/emulated/0/Download"
 PAGE = os.path.join(DL, "mind.html")
 
 
+def seed():
+    """Check-ins already saved in Termux, in the page's own format. The page
+    merges them on open (matched by exact ms time, never doubled)."""
+    out = []
+    for t, text in w.read_log(w.MENTAL_LOG, 10 ** 6):
+        if text.startswith("[mind page]"):
+            continue            # came from the page in the first place
+        ms = int(round(t * 1000))
+        out.append({"t": ms, "feel": "from Termux", "score": None, "note": text,
+                    "sleep": "", "stamp": w.stamp(t), "source": "termux mental.log"})
+    return out
+
+
 def install():
+    """Page + current Termux data -> Downloads/mind.html. True if it changed."""
     os.makedirs(DL, exist_ok=True)
-    if os.path.exists(PAGE) and open(PAGE, "rb").read() == open(SRC, "rb").read():
+    html = open(SRC).read()
+    data = json.dumps(seed(), ensure_ascii=False).replace("</", "<\\/")
+    html = html.replace('<script id="seed" type="application/json">[]</script>',
+                        '<script id="seed" type="application/json">%s</script>' % data, 1)
+    if os.path.exists(PAGE) and open(PAGE).read() == html:
         return False
-    shutil.copyfile(SRC, PAGE)
+    with open(PAGE + ".tmp", "w") as f:
+        f.write(html)
+    os.replace(PAGE + ".tmp", PAGE)
     return True
 
 
@@ -79,6 +101,9 @@ def main(a):
         return open_page()
     if a[0] == "import":
         return do_import()
+    if a[0] == "load":
+        print("page: " + PAGE + ("  (updated with %d Termux check-ins)" % len(seed()) if install() else "  (already up to date)"))
+        return
     if a[0] == "where":
         return print("page:  %s\nsaves: %s/mind-*.json\nsource: %s" % (PAGE, DL, SRC))
     print(__doc__)
