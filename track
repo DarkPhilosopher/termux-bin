@@ -89,7 +89,7 @@ def log_progress(g, text):
         g["done"], g["percent"] = True, 100
     if g["percent"] >= 100:
         g["done"] = True
-    g["progress"].append([int(time.time()), text])
+    g["progress"].append([round(time.time(), 3), text])
     return "saved to '%s': %s  (%s, %d%%)" % (g["name"], text, "complete" if g["done"] else "not complete", g["percent"])
 
 
@@ -212,7 +212,7 @@ def goals_menu():
 def add_goal(name):
     goals = load_goals()
     goals.append({"name": w.clean_text(name), "done": False, "percent": 0,
-                  "created": int(time.time()), "progress": []})
+                  "created": round(time.time(), 3), "progress": []})
     save_goals(goals)
     print("goal %d added: %s" % (len(goals), goals[-1]["name"]))
 
@@ -229,7 +229,7 @@ def _last_asked():
 
 def _mark_asked(kind):
     d = _last_asked()
-    d[kind] = int(time.time())
+    d[kind] = round(time.time(), 3)
     os.makedirs(w.STATE, exist_ok=True)
     with open(LAST_ASKED, "w") as f:
         json.dump(d, f)
@@ -288,7 +288,7 @@ def main_menu():
                 ("Goals", goals_menu),
                 ("Show everything (recall)", lambda: w.pager(w.fit(show_simple("mood", 10) + [""] + show_simple("productivity", 10) + [""] + show_goals(False)))),
                 ("Reminders on/off", lambda: remind("off" if w.is_on(REMIND) else "on"))],
-           header=lambda: ["track -- " + time.strftime("%a %d %b  %H:%M")] + w.fit(quick()))
+           header=lambda: ["track -- " + w.stamp()] + w.fit(quick()))
 
 
 def quick():
@@ -325,7 +325,7 @@ def main(a):
             g["done"] = tail.lower() == "done"
             if g["done"]:
                 g["percent"] = 100
-            g["progress"].append([int(time.time()), "marked " + ("complete" if g["done"] else "not complete")])
+            g["progress"].append([round(time.time(), 3), "marked " + ("complete" if g["done"] else "not complete")])
             msg = "%s: %s" % (g["name"], "complete" if g["done"] else "not complete")
         else:
             msg = log_progress(g, tail or ask("What progress, exactly?"))

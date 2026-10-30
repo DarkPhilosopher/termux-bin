@@ -58,7 +58,7 @@ def sh(cmd, timeout=15):
 
 
 def now_stamp():
-    return datetime.now().strftime("%m-%d-%Y %H:%M")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
 def append_timestamped(path, speaker, text):

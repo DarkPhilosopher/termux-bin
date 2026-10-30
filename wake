@@ -39,7 +39,7 @@ def main():
             ("Task reminder", run("task-reminder")),
             ("Diagnostics", run("diagnostics")),
             ("Claude, sync, updates", w.overseer._menu_wakeup),
-        ], header=lambda: w.fit(["wake -- " + time.strftime("%a %d %b  %H:%M")] + w.all_quick()))
+        ], header=lambda: w.fit(["wake -- " + w.stamp()] + w.all_quick()))
     elif a[0] == "start":
         w.startup()
     elif a[0] == "tick":

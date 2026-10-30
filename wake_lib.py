@@ -101,7 +101,21 @@ def read(path):
         return ""
 
 
+def stamp(epoch=None):
+    """Full timestamp to the millisecond: 2026-10-30 15:42:07.123.
+    Gabe: "show full time stamp even milliseconds for all things"."""
+    epoch = time.time() if epoch is None else epoch
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch)) + ".%03d" % int(round(epoch % 1 * 1000) % 1000)
+
+
 def ago(epoch):
+    """Full timestamp first, then how long ago, e.g.
+    "2026-10-21 14:13:05.000 (9 days ago)". Entries saved before
+    2026-10-30 only kept whole seconds, so they show .000."""
+    return "%s (%s)" % (stamp(epoch), _rel(epoch))
+
+
+def _rel(epoch):
     mins = int((time.time() - epoch) // 60)
     if mins < 1:
         return "just now"
@@ -169,7 +183,7 @@ def append_log(path, text):
     text = clean_text(text) or "ok"
     os.makedirs(STATE, exist_ok=True)
     with open(path, "a") as f:
-        f.write("%d\t%s\n" % (time.time(), text))
+        f.write("%.3f\t%s\n" % (time.time(), text))
     return text
 
 
@@ -449,7 +463,7 @@ def startup():
     """Shown automatically when a Termux session opens (~/.bashrc). Every
     line in full (wrapped, never cut off), then one key 1-8 picks an option
     -- no Enter. 15 s, or any other key, and it gets out of the way."""
-    print("\n".join(fit(["wake -- " + time.strftime("%a %d %b  %H:%M")] + all_quick())))
+    print("\n".join(fit(["wake -- " + stamp()] + all_quick())))
     print("\n".join(fit(["press 1-8 (no enter), anything else skips:"] +
                          ["  %d %s" % (i, label) for i, (label, _) in enumerate(STARTUP_OPTIONS, 1)])))
     sys.stdout.write("> ")
