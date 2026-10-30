@@ -1,5 +1,6 @@
 """babymenu -- one consistent numbered-menu pattern, shared by any of
-these utilities that want it: up to 8 options per screen, numbered.
+these utilities that want it: always exactly 8 numbered rows per
+screen (unused ones are empty `-` placeholders).
 Slot 7 is ALWAYS back (if there's a menu above this one) or exit (if
 this is the top level) -- fixed, on purpose, so the same keypress
 means the same thing on every screen in every tool, even on a screen
@@ -90,6 +91,13 @@ def render(title, options, page=0, has_parent=True):
     if has_more:
         rows[8] = "more..."
         keymap["8"] = MORE
+
+    # Always exactly 8 rows, never more, never fewer -- an unused slot is an
+    # empty placeholder that does nothing when pressed. Requested: "all
+    # menus show 8 options not more and not less even to have place
+    # holders empty".
+    for slot in range(1, 9):
+        rows.setdefault(slot, "-")
 
     width = _width()
     lines[0] = _fit(lines[0], width)   # the title line, passed in already-built
