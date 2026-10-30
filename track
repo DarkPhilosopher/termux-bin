@@ -1,0 +1,350 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""track -- containers for your own answers: mood, productivity, goals.
+Plain local Python, no AI. Everything saves in ~/.wake/.
+
+    mood                     how's your mood? (asks, saves)   mood <text> saves directly
+    productivity             how productive are you being?   productivity <text>
+    goals                    your goals: each its own container --
+                               complete yes/no, percent, exactly what progress
+    goals add <name>         new goal
+    goals <n> <text>         log progress on goal n ("40%" in the text sets the
+                               percent, "done" marks it complete)
+    goals <n> done|undone    mark complete / not complete
+    track show [mood|productivity|goals]   read it all back (recall)
+    track remind on|off      automatic reminders (notifications with a Reply
+                               button): mood every 3 h, productivity every 6 h,
+                               one unfinished goal a day
+    track                    menu (8 rows)
+
+Requested: "make a container for my response if i say mood or productivity
+each their own or if i say goals each their own which goal and whether or
+not its been either finished or sub container besides yes or no complete
+also what percentage and one more sub container what progress exactly.
+they call on me text input save for me to get reminded when i call on it
+later or auto reminders".
+"""
+import json
+import os
+import re
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import wake_lib as w  # noqa: E402
+import notify_lib  # noqa: E402
+
+LOGS = {"mood": os.path.join(w.STATE, "mood.log"),
+        "productivity": os.path.join(w.STATE, "productivity.log")}
+QUESTION = {"mood": "How's your mood right now?",
+            "productivity": "How productive are you being? What got done?"}
+GOALS = os.path.join(w.STATE, "goals.json")
+REMIND = "track-remind"
+EVERY_MIN = {"mood": 180, "productivity": 360, "goals": 24 * 60}
+LAST_ASKED = os.path.join(w.STATE, "track-last-asked.json")
+
+
+# ---------------------------------------------------------------- storage
+
+def load_goals():
+    try:
+        with open(GOALS) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
+def save_goals(goals):
+    os.makedirs(w.STATE, exist_ok=True)
+    tmp = GOALS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(goals, f, indent=1)
+    os.replace(tmp, GOALS)
+
+
+def find_goal(goals, ref):
+    """ref: a goal's number (1-based) or (part of) its name."""
+    ref = (ref or "").strip()
+    if ref.isdigit() and 1 <= int(ref) <= len(goals):
+        return goals[int(ref) - 1]
+    hits = [g for g in goals if ref.lower() in g["name"].lower()] if ref else []
+    return hits[0] if len(hits) == 1 else None
+
+
+def goal_line(n, g):
+    return "%d. [%s] %s -- %d%%%s" % (n, "x" if g["done"] else " ", g["name"], g["percent"],
+                                       ", last: " + w.ago(g["progress"][-1][0]) if g["progress"] else "")
+
+
+def log_progress(g, text):
+    """Saves exactly what was said; "NN%" sets the percent, "done"/"finished"
+    marks it complete (and 100%)."""
+    text = w.clean_text(text)
+    if not text:
+        return "nothing typed -- nothing saved"
+    m = re.search(r"(\d{1,3})\s*%", text)
+    if m:
+        g["percent"] = max(0, min(100, int(m.group(1))))
+    if re.search(r"\b(done|finished|complete[d]?)\b", text, re.I) and not re.search(r"\bnot\s+(done|finished|complete)", text, re.I):
+        g["done"], g["percent"] = True, 100
+    if g["percent"] >= 100:
+        g["done"] = True
+    g["progress"].append([int(time.time()), text])
+    return "saved to '%s': %s  (%s, %d%%)" % (g["name"], text, "complete" if g["done"] else "not complete", g["percent"])
+
+
+# ---------------------------------------------------------------- the containers
+
+def ask(prompt):
+    print(prompt)
+    try:
+        return input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+def save_simple(kind, text=None):
+    text = text if text is not None else ask(QUESTION[kind])
+    if not w.clean_text(text or ""):
+        print("nothing typed -- nothing saved")
+        return
+    print("saved to %s: %s" % (kind, w.append_log(LOGS[kind], text)))
+
+
+def show_simple(kind, n=30):
+    rows = w.read_log(LOGS[kind], n)
+    return ["== %s ==" % kind] + (["  %-14s %s" % (w.ago(t), x) for t, x in reversed(rows)] or ["  nothing saved yet"])
+
+
+def show_goals(full=True):
+    goals = load_goals()
+    lines = ["== goals =="]
+    if not goals:
+        return lines + ["  no goals yet -- goals add <name>"]
+    for n, g in enumerate(goals, 1):
+        lines.append(goal_line(n, g))
+        lines.append("     complete: %s | percent: %d%%" % ("yes" if g["done"] else "no", g["percent"]))
+        rows = g["progress"] if full else g["progress"][-1:]
+        lines += ["     %-14s %s" % (w.ago(t), x) for t, x in reversed(rows)] or ["     no progress logged yet"]
+    return lines
+
+
+def goal_screen(g_index):
+    def current():
+        return load_goals()[g_index]
+
+    def edit(fn):
+        goals = load_goals()
+        out = fn(goals[g_index])
+        save_goals(goals)
+        if out:
+            print(out)
+
+    def progress():
+        t = ask("What progress, exactly? (\"40%\" sets the percent, \"done\" completes it)")
+        edit(lambda g: log_progress(g, t))
+
+    def percent():
+        t = ask("Percent done (0-100)?")
+        if t.rstrip("%").isdigit():
+            def setp(g):
+                g["percent"] = max(0, min(100, int(t.rstrip("%"))))
+                g["done"] = g["percent"] >= 100 or g["done"]
+                return "%s: %d%%" % (g["name"], g["percent"])
+            edit(setp)
+        else:
+            print("not a number -- unchanged")
+
+    def toggle():
+        def flip(g):
+            g["done"] = not g["done"]
+            if g["done"]:
+                g["percent"] = 100
+            return "%s: %s" % (g["name"], "complete" if g["done"] else "not complete")
+        edit(flip)
+
+    def history():
+        g = current()
+        w.pager(w.fit(["== %s ==" % g["name"], "complete: %s | percent: %d%%" % ("yes" if g["done"] else "no", g["percent"])]
+                      + ["  %-14s %s" % (w.ago(t), x) for t, x in reversed(g["progress"])] or ["  no progress yet"]))
+
+    def rename():
+        t = ask("New name?")
+        if t:
+            edit(lambda g: g.update(name=t) or "renamed to " + t)
+
+    def delete():
+        if ask("Delete '%s' and all its progress? type yes" % current()["name"]).lower() == "yes":
+            goals = load_goals()
+            gone = goals.pop(g_index)
+            save_goals(goals)
+            print("deleted " + gone["name"])
+            raise StopIteration
+
+    try:
+        w.menu("", [("Log progress (what exactly)", progress), ("Set percent", percent),
+                    ("Complete yes/no", toggle), ("History", history), ("Rename", rename),
+                    ("Delete", delete)],
+               header=lambda: w.fit(goal_line(g_index + 1, current()).split("\n")), has_parent=True)
+    except StopIteration:
+        pass
+
+
+def goals_menu():
+    """The goal list: pick one to open its container, or add a new one.
+    Always 8 rows (babymenu); 7 is back."""
+    while True:
+        goals = load_goals()
+        actions = [(goal_line(n, g)[len(str(n)) + 2:], n - 1) for n, g in enumerate(goals, 1)]
+        actions.append(("+ new goal", "new"))
+        print("\n".join(w.fit(["goals -- pick one to open"])))
+        action, raw = w.overseer._menu_screen("", actions, has_parent=True)
+        if action in (w.babymenu.EXIT, w.babymenu.BACK) or raw.lower() in ("q", "quit", "/quit"):
+            return
+        if action == "new":
+            name = ask("Name of the new goal?")
+            if name:
+                add_goal(name)
+        elif isinstance(action, int):
+            goal_screen(action)
+
+
+def add_goal(name):
+    goals = load_goals()
+    goals.append({"name": w.clean_text(name), "done": False, "percent": 0,
+                  "created": int(time.time()), "progress": []})
+    save_goals(goals)
+    print("goal %d added: %s" % (len(goals), goals[-1]["name"]))
+
+
+# ---------------------------------------------------------------- reminders
+
+def _last_asked():
+    try:
+        with open(LAST_ASKED) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _mark_asked(kind):
+    d = _last_asked()
+    d[kind] = int(time.time())
+    os.makedirs(w.STATE, exist_ok=True)
+    with open(LAST_ASKED, "w") as f:
+        json.dump(d, f)
+
+
+def notify(kind):
+    me = os.path.join(HERE, "track")
+    act = lambda label, cmd: notify_lib.action("track-" + kind, label, "%s %s %s" % (w.PY, me, cmd))
+    if kind == "goals":
+        goals = [g for g in load_goals() if not g["done"]]
+        if not goals:
+            return
+        g = min(goals, key=lambda g: g["progress"][-1][0] if g["progress"] else 0)
+        n = load_goals().index(g) + 1
+        title, content = "goal: " + g["name"], "%d%% so far. What progress exactly? (\"40%%\" sets percent)" % g["percent"]
+        buttons = (w._btn(1, "Reply", act("Reply", "goals %d $REPLY" % n))
+                   + w._btn(2, "Done!", act("Done!", "goals %d done" % n))
+                   + w._btn(3, "Pause", act("Pause", "remind off")))
+    else:
+        last = w.last_entry(LOGS[kind])
+        title = kind
+        content = QUESTION[kind] + ("  (last: %s, %s)" % (last[1], w.ago(last[0])) if last else "")
+        buttons = (w._btn(1, "Reply", act("Reply", "%s $REPLY" % kind))
+                   + w._btn(2, "Pause", act("Pause", "remind off")))
+    notify_lib.remember("track-" + kind, title, content)
+    w.sh(["termux-notification", "--id", "track-" + kind, "--title", title, "--content", content[:1000]]
+         + buttons + notify_lib.vibrate_args(reply=True), 20)
+    _mark_asked(kind)
+
+
+def tick():
+    """Called by wake's 20-minute job: sends whichever reminder is due."""
+    if not w.is_on(REMIND):
+        return
+    asked = _last_asked()
+    for kind, every in EVERY_MIN.items():
+        if time.time() - asked.get(kind, 0) > (every - 2) * 60:
+            notify(kind)
+
+
+def remind(state):
+    if state in ("on", "off"):
+        w.set_on(REMIND, state == "on")
+        if state == "off":
+            for kind in EVERY_MIN:
+                w.sh(["termux-notification-remove", "--id", "track-" + kind], 10)
+    print("track reminders: %s (mood every 3 h, productivity every 6 h, one goal a day)"
+          % ("on" if w.is_on(REMIND) else "off"))
+
+
+# ---------------------------------------------------------------- entry
+
+def main_menu():
+    w.menu("", [("Mood", lambda: save_simple("mood")),
+                ("Productivity", lambda: save_simple("productivity")),
+                ("Goals", goals_menu),
+                ("Show everything (recall)", lambda: w.pager(w.fit(show_simple("mood", 10) + [""] + show_simple("productivity", 10) + [""] + show_goals(False)))),
+                ("Reminders on/off", lambda: remind("off" if w.is_on(REMIND) else "on"))],
+           header=lambda: ["track -- " + time.strftime("%a %d %b  %H:%M")] + w.fit(quick()))
+
+
+def quick():
+    """Short lines for the wake board / startup screen."""
+    out = []
+    for kind in ("mood", "productivity"):
+        last = w.last_entry(LOGS[kind])
+        out.append("%-9s %s" % (kind, ("last %s\n          %s" % (w.ago(last[0]), last[1])) if last else "nothing yet"))
+    goals = load_goals()
+    if goals:
+        open_ = [g for g in goals if not g["done"]]
+        out.append("goals     %d open, %d complete" % (len(open_), len(goals) - len(open_)))
+    return out
+
+
+def main(a):
+    if not a:
+        return main_menu()
+    cmd, rest = a[0].lower(), a[1:]
+    text = " ".join(rest)
+    if cmd in LOGS:
+        return save_simple(cmd, text if rest else None)
+    if cmd in ("goal", "goals"):
+        if not rest:
+            return goals_menu()
+        if rest[0].lower() == "add":
+            return add_goal(" ".join(rest[1:])) if rest[1:] else add_goal(ask("Name of the new goal?"))
+        goals = load_goals()
+        g = find_goal(goals, rest[0])
+        if not g:
+            sys.exit("no goal %r -- `goals` lists them" % rest[0])
+        tail = " ".join(rest[1:])
+        if tail.lower() in ("done", "undone"):
+            g["done"] = tail.lower() == "done"
+            if g["done"]:
+                g["percent"] = 100
+            g["progress"].append([int(time.time()), "marked " + ("complete" if g["done"] else "not complete")])
+            msg = "%s: %s" % (g["name"], "complete" if g["done"] else "not complete")
+        else:
+            msg = log_progress(g, tail or ask("What progress, exactly?"))
+        save_goals(goals)
+        return print(msg)
+    if cmd == "show":
+        kinds = rest or ["mood", "productivity", "goals"]
+        lines = []
+        for k in kinds:
+            lines += (show_goals() if k.startswith("goal") else show_simple(k)) + [""]
+        return print("\n".join(w.fit(lines)))
+    if cmd == "remind":
+        return remind(rest[0] if rest else "")
+    if cmd == "tick":
+        return tick()
+    if cmd == "quick":
+        return print("\n".join(quick()))
+    print(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

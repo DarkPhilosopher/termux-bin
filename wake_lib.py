@@ -203,7 +203,7 @@ def set_on(name, on):
 
 def _sync_job():
     """One Android job serves both reminders: on while either is on."""
-    if is_on("task-remind") or is_on("mental-remind"):
+    if is_on("task-remind") or is_on("mental-remind") or is_on("track-remind"):
         sh(["termux-job-scheduler", "--job-id", JOB_ID,
             "--period-ms", str(TICK_MIN * 60 * 1000), "--persisted", "true",
             "--script", os.path.join(HERE, "wake-tick")], 20)
@@ -294,6 +294,9 @@ def tick():
         due = not last or time.time() - last[0] > (MENTAL_EVERY_MIN - 2) * 60
         if loud or due:
             mental_notify(loud=loud)
+    if is_on("track-remind"):   # mood / productivity / goals (~/bin/track)
+        subprocess.run([PY, os.path.join(HERE, "track"), "tick"], stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=60)
 
 
 # ---------------------------------------------------------------- quick summaries
