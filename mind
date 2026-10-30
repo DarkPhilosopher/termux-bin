@@ -1,0 +1,88 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""mind -- the offline Mind & Routine page (mental check-in + daily routine)
+in Chrome. The page is one file: it keeps working after Termux is closed,
+with no internet. Plain local Python here, no AI.
+
+    mind            put the newest page in Downloads (mind.html) and open it
+    mind import     copy check-ins from the newest Downloads/mind-*.json
+                    (the page's "6 Save JSON") into ~/.wake/mental.log, so
+                    `wake` / the Termux startup screen show them too.
+                    Never duplicates: each check-in is matched by its exact
+                    millisecond timestamp.
+    mind where      print where the page and its JSON saves live
+
+In Chrome you can also type the address directly:
+    file:///sdcard/Download/mind.html
+and use Chrome's menu > "Add to Home screen" for a one-tap icon.
+"""
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import wake_lib as w  # noqa: E402
+
+SRC = os.path.join(HERE, "web", "mind.html")
+DL = "/storage/emulated/0/Download"
+PAGE = os.path.join(DL, "mind.html")
+
+
+def install():
+    os.makedirs(DL, exist_ok=True)
+    if os.path.exists(PAGE) and open(PAGE, "rb").read() == open(SRC, "rb").read():
+        return False
+    shutil.copyfile(SRC, PAGE)
+    return True
+
+
+def open_page():
+    print("page: " + PAGE + ("  (updated)" if install() else ""))
+    print("opening in Chrome... (or type file:///sdcard/Download/mind.html in Chrome)")
+    subprocess.run(["termux-open", "--content-type", "text/html", PAGE])
+
+
+def do_import():
+    saves = sorted(glob.glob(os.path.join(DL, "mind-*.json")), key=os.path.getmtime)
+    if not saves:
+        sys.exit("no mind-*.json in Downloads yet -- in the page, press 6 Save JSON first")
+    path = saves[-1]
+    data = json.load(open(path))
+    have = {round(t, 3) for t, _ in w.read_log(w.MENTAL_LOG, 10 ** 6)}
+    added = 0
+    rows = []
+    for e in data.get("mental", []):
+        t = round(e["t"] / 1000.0, 3)
+        if t in have:
+            continue
+        feel = e.get("feel", "")
+        text = " -- ".join(x for x in (feel, e.get("note", ""), ("slept " + e["sleep"]) if e.get("sleep") else "") if x)
+        rows.append((t, "[mind page] " + w.clean_text(text)))
+        added += 1
+    if rows:
+        os.makedirs(w.STATE, exist_ok=True)
+        old = w.read(w.MENTAL_LOG).splitlines()
+        merged = old + ["%.3f\t%s" % r for r in rows]
+        merged.sort(key=lambda line: float(line.split("\t", 1)[0]) if line.split("\t", 1)[0].replace(".", "", 1).isdigit() else 0)
+        with open(w.MENTAL_LOG + ".tmp", "w") as f:
+            f.write("\n".join(merged) + "\n")
+        os.replace(w.MENTAL_LOG + ".tmp", w.MENTAL_LOG)
+    print("from %s: %d new check-in(s) added to %s (%d already there)"
+          % (os.path.basename(path), added, w.MENTAL_LOG, len(data.get("mental", [])) - added))
+
+
+def main(a):
+    if not a:
+        return open_page()
+    if a[0] == "import":
+        return do_import()
+    if a[0] == "where":
+        return print("page:  %s\nsaves: %s/mind-*.json\nsource: %s" % (PAGE, DL, SRC))
+    print(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -43,6 +43,7 @@ declare -A CATALOG=(
   [mood]="mood -- save how your mood is (track)"
   [productivity]="productivity -- save how productive you are being (track)"
   [goals]="goals -- each goal its own container: complete yes/no, percent, exact progress (track)"
+  [mind]="mind -- offline Mind & Routine page in Chrome: mental check-in + daily routine, JSON save/load; mind import"
   [vframes]="vframes -- still images from a video every 0.01s/1.5s/1m/1h, 720p, into its own Downloads folder (runs in Ubuntu)"
 )
 declare -A LAUNCH=(
@@ -68,6 +69,7 @@ declare -A LAUNCH=(
   [mood]='exec python3 "$HOME/bin/track" mood "$@"'
   [productivity]='exec python3 "$HOME/bin/track" productivity "$@"'
   [goals]='exec python3 "$HOME/bin/track" goals "$@"'
+  [mind]='exec python3 "$HOME/bin/mind" "$@"'
   [vframes]='exec "$HOME/bin/vframes" "$@"'
 )
 
