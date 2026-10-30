@@ -38,6 +38,7 @@ declare -A CATALOG=(
   [feed]="feed -- a chronological read-only log of everything already tracked here: git, RAM warnings, weather, voice, sync, file moves"
   [relay-file]="relay-file -- pinned notification: Reply saves what you type to a file"
   [relay-claude]="relay-claude -- pinned notification: Reply sends what you type into the claude session"
+  [mailbackup]="mailbackup -- gzip (optionally gpg-encrypt) a folder/file and email it to yourself in <25MB parts, no Claude needed at runtime"
 )
 declare -A LAUNCH=(
   [note3]='exec "$HOME/bin/note3" "$@"'
@@ -57,11 +58,13 @@ declare -A LAUNCH=(
   [feed]='exec python3 "$HOME/bin/feed" "$@"'
   [relay-file]='exec python3 "$HOME/bin/relay-file" "$@"'
   [relay-claude]='exec python3 "$HOME/bin/relay-claude" "$@"'
+  [mailbackup]='exec python3 "$HOME/bin/mailbackup.py" "$@"'
 )
 
 # commands that reuse another command's script (default: same name)
 declare -A SOURCE=(
   [vibrate]=notify_lib.py
+  [mailbackup]=mailbackup.py
 )
 
 made=0
